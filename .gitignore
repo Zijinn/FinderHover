@@ -1,0 +1,18 @@
+# macOS build outputs
+build/
+
+# Local test outputs and diagnostics may contain window names or machine state
+TestResults/
+
+# macOS metadata
+.DS_Store
+
+# Xcode / SwiftPM local state
+DerivedData/
+.build/
+.swiftpm/
+
+# Local editor and scratch files
+.vscode/
+.idea/
+*.swp
