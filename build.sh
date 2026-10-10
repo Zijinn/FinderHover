@@ -15,6 +15,7 @@ STAGE="$(mktemp -d "$BUILD/.compile-XXXXXX")"
 trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$STAGE/FinderHover.app/Contents/MacOS" "$STAGE/FinderHover.app/Contents/Resources"
 cp "$ROOT/Info.plist" "$STAGE/FinderHover.app/Contents/Info.plist"
+cp "$ROOT/Assets/AppIcon.icns" "$STAGE/FinderHover.app/Contents/Resources/AppIcon.icns"
 printf 'FinderHover build output\n' > "$STAGE/FinderHover.app/Contents/Resources/finderhover-generated.txt"
 SDK="$(xcrun --sdk macosx --show-sdk-path)"
 xcrun swiftc -swift-version 5 -O -sdk "$SDK" -target "$(uname -m)-apple-macosx13.0" \
