@@ -133,10 +133,10 @@ final class AppController: NSObject, NSApplicationDelegate {
         let icon = NSImage(systemSymbolName: "rectangle.stack", accessibilityDescription: "访达悬停")
         icon?.isTemplate = true
         statusItem.button?.image = icon
-        statusItem.button?.toolTip = "访达悬停 · 测试版"
+        statusItem.button?.toolTip = "访达悬停"
         let menu = NSMenu()
         menu.autoenablesItems = false
-        let heading = NSMenuItem(title: "访达悬停 · 测试版", action: nil, keyEquivalent: "")
+        let heading = NSMenuItem(title: "访达悬停", action: nil, keyEquivalent: "")
         heading.isEnabled = false
         menu.addItem(heading)
         permissionItem = NSMenuItem(title: "检查权限中…", action: nil, keyEquivalent: "")
