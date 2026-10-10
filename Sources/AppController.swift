@@ -45,7 +45,7 @@ final class AppController: NSObject, NSApplicationDelegate {
             self.windowPanel.hide()
             self.gate.suppressUntilExit()
             if entry.element == nil {
-                self.lastAction = "示例预览已关闭；示例条目不会操作真实窗口"
+                self.lastAction = "预览已关闭；预览条目不会操作真实窗口"
             } else {
                 let result = self.service.focus(entry)
                 self.lastAction = result.message
@@ -144,7 +144,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         menu.addItem(permissionItem)
         menu.addItem(.separator())
         addMenuItem("显示当前访达窗口", selector: #selector(showCurrentWindows), to: menu)
-        addMenuItem("界面预览（示例数据）", selector: #selector(showPreview), to: menu)
+        addMenuItem("界面预览", selector: #selector(showPreview), to: menu)
         let glassControl = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         let controlView = NSView(frame: NSRect(x: 0, y: 0, width: 250, height: 60))
         let caption = NSTextField(labelWithString: "玻璃透明度")
