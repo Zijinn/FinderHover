@@ -216,7 +216,7 @@ final class WindowListPanel {
         let listHeight = min(max(rowPitch, CGFloat(entries.count) * rowPitch), maxHeight - 54)
         let size = NSSize(width: width, height: listHeight + 54)
         let content = NSView(frame: NSRect(origin: .zero, size: size))
-        let heading = NSTextField(labelWithString: preview ? "访达 · 示例预览" : "访达")
+        let heading = NSTextField(labelWithString: "访达")
         heading.font = .systemFont(ofSize: 12, weight: .semibold)
         heading.textColor = .secondaryLabelColor
         heading.frame = NSRect(x: 20, y: size.height - 32, width: width - 116, height: 17)
