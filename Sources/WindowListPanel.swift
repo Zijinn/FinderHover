@@ -165,10 +165,6 @@ final class WindowListPanel {
             glassStyle = glass.style == .clear ? "clear" : "regular"
             glass.cornerRadius = 24
             glass.tintColor = nil
-            if #available(macOS 27.0, *) {
-                glass.effectIsInteractive = true
-                interactiveGlass = true
-            }
             glass.contentView = NSView(frame: content.bounds)
             materialImplementation = "NSGlassEffectView"
             background = glass
