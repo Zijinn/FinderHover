@@ -18,7 +18,7 @@ cp "$ROOT/Info.plist" "$STAGE/FinderHover.app/Contents/Info.plist"
 cp "$ROOT/Assets/AppIcon.icns" "$STAGE/FinderHover.app/Contents/Resources/AppIcon.icns"
 printf 'FinderHover build output\n' > "$STAGE/FinderHover.app/Contents/Resources/finderhover-generated.txt"
 SDK="$(xcrun --sdk macosx --show-sdk-path)"
-xcrun swiftc -swift-version 5 -O -sdk "$SDK" -target "$(uname -m)-apple-macosx13.0" \
+xcrun swiftc -swift-version 5 -O -sdk "$SDK" -target "$(uname -m)-apple-macosx26.0" \
     "$ROOT/Sources/Geometry.swift" "$ROOT/Sources/AccessibilityService.swift" \
     "$ROOT/Sources/WindowListPanel.swift" "$ROOT/Sources/AppController.swift" "$ROOT/Sources/main.swift" \
     -framework AppKit -framework ApplicationServices -o "$STAGE/FinderHover.app/Contents/MacOS/FinderHover"
