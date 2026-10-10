@@ -1,81 +1,33 @@
-# 访达悬停 · macOS 27 原型
+# FinderHover
 
-一个原生菜单栏小工具：鼠标停在 Dock 的访达图标上约 0.28 秒，显示竖排窗口名称列表；点击条目切换到已有访达窗口。
+A native macOS utility that shows open Finder windows when the pointer rests on the Finder icon in the Dock.
 
-## 启动
+## Release
 
-双击 `build/FinderHover.app`。应用没有自己的 Dock 图标，入口是菜单栏的叠放窗口图标。
+Version `0.0.1` is released from the `v0.0.1` tag. GitHub Actions runs on a macOS runner, builds the signed app bundle used by the workflow, creates `FinderHover-0.0.1.dmg`, and attaches it to the GitHub Release.
 
-第一次运行需要手动开启：**系统设置 → 隐私与安全性 → 辅助功能 → 访达悬停 / FinderHover**。
+## Icon direction
 
-若系统列表中没有它，点击 `+` 添加：
+The app icon uses a custom stacked-window mark: a focused Finder-like front window with offset translucent frames behind it. The concept communicates open-window selection and hover focus without copying Apple's Finder artwork.
 
-```
-<项目目录>/build/FinderHover.app
-```
+Source assets are in `Assets/AppIcon.iconset/`; the macOS bundle asset is `Assets/AppIcon.icns`.
 
-开启后应用定期重新检测权限，一般无需重启。如果重新编译后失去授权，将旧项目从权限列表移除并重新添加新版 app；本地原型使用临时签名，未做公证或正式发行签名。
+## Build
 
-## 不授权也可以先看界面
-
-点击菜单栏图标 → **界面预览（示例数据）**。
-
-此预览使用最初截图里的 8 个文件夹名称，会明确显示“示例预览”。点击示例条目只关闭预览，不操作真实窗口，也不表示辅助功能已授权。
-
-应用尚未运行时，也可以在终端执行：
+Build locally on macOS with Xcode command-line tools:
 
 ```bash
-cd '/path/to/FinderHover'
-./run.sh --preview
+./build.sh
 ```
 
-已经运行时，请使用菜单栏中的预览命令；`open` 不会给已运行进程重新传入启动参数。
-
-## macOS 27 界面优化
-
-- 使用原生 **NSGlassEffectView**，不是传统 NSVisualEffectView 的模拟玻璃。
-- 开启 macOS 27 新增的 **effectIsInteractive**，让系统处理玻璃的交互反馈。
-- 玻璃后景与文字/图标前景使用两个联动窗口：后景 clear 玻璃默认窗口强度为 28%，前景保持不透明，不额外叠加底色；相比只改 clear 样式，这次通过窗口合成器实际降低后景的不透明度。
-- 菜单栏“玻璃透明度”滑块范围为 0–100%，实时调整并记住设置。0% 表示后景完全不透明，100% 表示后景完全透明；文字和图标不受影响。无历史偏好时默认 72%（对应后景 alpha 28%）；升级会兼容此前保存的背景强度设置。滑块数值不是测量出的 Dock 透明度。
-- 开启系统“减少透明度”或“增强对比度”时，不降低背景层强度；不替用户修改系统设置。
-- 24 pt 圆角、按标题长度自适应的 300–380 pt 列表宽度、52 pt 行间距、原生访达图标与系统字体。
-- 悬停采用较轻的中性高亮；按下时使用系统强调色。
-- 短淡入/淡出，可中断；响应系统“减少动态效果”。原生玻璃遵循系统外观和辅助显示设置。
-- 老系统的毛玻璃回退路径保留，但本轮只在 macOS 27.0.1 上测试，不声明其他版本兼容性已验证。
-
-玻璃实际表现会随桌面背景、浅/深色模式以及系统玻璃/透明度设置变化。请在运行中的面板上看效果；`TestResults/preview-light.png`、`preview-dark.png` 是布局预览，不包含系统实时动态玻璃。后景强度另通过本应用的 WindowServer 窗口信息验证。当前没有截图权限，不能读取 Dock 实际像素，因此不声明默认 28% 就等于 Dock 的透明度。
-
-## 编译和测试
-
-编译需要带 macOS 27 SDK 的 Xcode（本机已具备），无第三方依赖，也不需要下载包。
+Package a DMG locally on macOS:
 
 ```bash
-./build.sh       # 构建并校验 app 的临时签名
-./test.sh        # 23 项逻辑测试、两种外观的布局/材质检查、动画中断测试、权限诊断
+./package-dmg.sh
 ```
 
-真实交互测试必须先授权并打开至少一个访达窗口：
+The GitHub release workflow runs automatically for tags matching `v*.*.*`.
 
-```bash
-./test.sh --integration
-```
+## Permissions
 
-**交互测试会短暂移动鼠标、调用窗口选择动作，随后恢复鼠标位置与原前台应用。**测试调用与行点击共用的窗口切换回调，而非注入物理鼠标点击。请先从菜单栏退出常驻原型，避免同时显示两个测试面板。不要在测试过程中使用鼠标。
-
-报告与预览文件位于 `TestResults/`；本轮结论见 `测试报告.md`。未授权时诊断中的 `windowCount: 0` 只表示读取被权限阻止，不能用来断言没有真实窗口。
-
-## 手动测试建议
-
-1. 用 `⌘N` 打开两个不同目录的访达窗口。
-2. 鼠标停在 Dock 的访达图标上，确认列出当前窗口名称。
-3. 鼠标移入列表，确认面板保持；点击其中一项，确认对应窗口置前。
-4. 鼠标离开，确认收起；再次进入图标，确认可重新展开。
-5. 如需要，额外测试最小化窗口、其他桌面的窗口、自动隐藏 Dock 和多显示器。这些组合未经过本轮真实交互验证。
-
-## 范围与隐私
-
-- 只针对访达；按窗口列出，不单独展开每个标签页。
-- 不修改 Dock，不注入系统进程，不使用私有 API。
-- 不读取文件内容，不联网，不采集窗口截图，不需要屏幕录制或自动化权限。
-- 窗口切换/读取使用系统辅助功能 API。导出的诊断报告可能包含窗口名称，请注意分享范围。
-- 无开机自启；退出方式：菜单栏图标 → 退出访达悬停。
+The app uses macOS Accessibility APIs to read Finder windows and the Dock Finder item. Grant permission in **System Settings → Privacy & Security → Accessibility**. It does not read file contents, capture screenshots, or require Screen Recording permission.
