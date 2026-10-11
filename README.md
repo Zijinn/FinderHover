@@ -1,33 +1,37 @@
-# FinderHover
+# Mac工具箱
 
-A native macOS utility that shows open Finder windows when the pointer rests on the Finder icon in the Dock.
+原生 macOS 菜单栏工具，整合 Finder 窗口切换与临时文件口袋。悬停 Dock 中的 Finder 图标可切换窗口；口袋用于短时收纳文件和截图，再以复制方式拖出。
 
-## Release
+为兼容现有辅助功能授权，应用内部 Bundle ID `com.zijin.FinderHoverPrototype` 和可执行文件名 `FinderHover` 保持不变；系统显示名称和发布包名称为“Mac工具箱”。
 
-Version `0.0.1` is released from the `v0.0.1` tag. GitHub Actions runs on a macOS runner, builds the signed app bundle used by the workflow, creates `FinderHover-0.0.1.dmg`, and attaches it to the GitHub Release.
+## 使用
 
-## Icon direction
+- 在 Finder Dock 图标上悬停，查看并切换 Finder 窗口。
+- 默认按 `⌥Space` 在任何应用中打开临时口袋。
+- 晃动菜单栏图标两次，或从菜单打开口袋。
+- 将文件或图片拖到菜单栏图标或口袋面板中收纳。普通文件保留原位置；剪贴板截图可从口袋中的“收纳剪贴板图片”按钮导入为 PNG。
+- 从口袋拖出一个或多个条目时默认复制，条目仍留在口袋中。口袋在应用退出时清空。
+- 从菜单选择“设置全局快捷键…”可录入新组合键；“恢复默认快捷键”还原为 `⌥Space`。自定义快捷键保存在当前用户偏好中，必须包含至少一个修饰键。
 
-The app icon uses a custom stacked-window mark: a focused Finder-like front window with offset translucent frames behind it. The concept communicates open-window selection and hover focus without copying Apple's Finder artwork.
+口袋不读取微信私有缓存，不需要屏幕录制权限。Finder 窗口读取和聚焦仍需在**系统设置 → 隐私与安全性 → 辅助功能**中授权。
 
-Source assets are in `Assets/AppIcon.iconset/`; the macOS bundle asset is `Assets/AppIcon.icns`.
+## 发布
 
-## Build
+当前版本 `0.2.0`（tag `v0.2.0`）。打包脚本生成 `Mac工具箱-0.2.0.dmg`，内部应用显示名称为“Mac工具箱”。
 
-Build locally on macOS with Xcode command-line tools:
+## 构建
+
+需要 macOS 与 Xcode 命令行工具：
 
 ```bash
 ./build.sh
+./test.sh
 ```
 
-Package a DMG locally on macOS:
+本地生成 DMG：
 
 ```bash
 ./package-dmg.sh
 ```
 
-The GitHub release workflow runs automatically for tags matching `v*.*.*`.
-
-## Permissions
-
-The app uses macOS Accessibility APIs to read Finder windows and the Dock Finder item. Grant permission in **System Settings → Privacy & Security → Accessibility**. It does not read file contents, capture screenshots, or require Screen Recording permission.
+GitHub Actions 对匹配 `v*.*.*` 的 tag 自动构建发布包。

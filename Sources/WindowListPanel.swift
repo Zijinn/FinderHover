@@ -201,6 +201,7 @@ final class WindowListPanel {
 
     func show(entries: [FinderWindow], icon: NSRect, screen: NSScreen,
               edge: DockEdge, preview: Bool = false, message: String? = nil) {
+        let wasDismissing = isDismissing
         let alreadyVisible = isVisible
         animationEpoch += 1
         isDismissing = false
@@ -265,12 +266,26 @@ final class WindowListPanel {
         backgroundPanel.order(.below, relativeTo: panel.windowNumber)
         panel.displayIfNeeded()
         backgroundPanel.displayIfNeeded()
-        NSAnimationContext.runAnimationGroup { context in
+        backgroundPanel.alphaValue = effectiveGlassStrength
+        if wasDismissing {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0
+                panel.animator().alphaValue = 1
+                backgroundPanel.animator().alphaValue = effectiveGlassStrength
+            }
+            return
+        }
+        let epoch = animationEpoch
+        NSAnimationContext.runAnimationGroup({ context in
             context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.14
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             panel.animator().alphaValue = 1
             backgroundPanel.animator().alphaValue = effectiveGlassStrength
-        }
+        }, completionHandler: { [weak self] in
+            guard let self = self, self.animationEpoch == epoch else { return }
+            self.panel.alphaValue = 1
+            self.backgroundPanel.alphaValue = self.effectiveGlassStrength
+        })
     }
 
     func hide() {
