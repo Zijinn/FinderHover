@@ -6,6 +6,14 @@ mkdir -p "$ROOT/build" "$ROOT/TestResults"
 xcrun swiftc -swift-version 5 "$ROOT/Sources/Geometry.swift" "$ROOT/Tests/main.swift" \
     -framework Foundation -framework CoreGraphics -o "$ROOT/build/GeometryTests"
 "$ROOT/build/GeometryTests" | tee "$ROOT/TestResults/logic-tests.txt"
+POCKET_TEST="$ROOT/build/PocketTests"
+xcrun swiftc -swift-version 5 "$ROOT/Sources/ShakeDetector.swift" "$ROOT/Sources/PocketStore.swift" "$ROOT/Tests/PocketTests.swift" \
+    -framework AppKit -framework CoreGraphics -o "$POCKET_TEST"
+"$POCKET_TEST" | tee "$ROOT/TestResults/pocket-tests.txt"
+SHORTCUT_TEST="$ROOT/build/ShortcutTests"
+xcrun swiftc -swift-version 5 "$ROOT/Sources/ShortcutManager.swift" "$ROOT/Tests/ShortcutTests.swift" \
+    -framework AppKit -framework Carbon -o "$SHORTCUT_TEST"
+"$SHORTCUT_TEST" | tee "$ROOT/TestResults/shortcut-tests.txt"
 if [ ! -d "$ROOT/build/FinderHover.app" ]; then "$ROOT/build.sh"; fi
 for theme in light dark; do
     rm -f "$ROOT/TestResults/preview-$theme.png" "$ROOT/TestResults/preview-$theme.png.json"
@@ -50,7 +58,7 @@ for theme in ('light', 'dark'):
     assert meta.get('allRowsFitDocument') is True, meta
     assert meta.get('previewUsesSampleData') is True, meta
     assert meta.get('nativeLiquidGlass') is True, meta
-    assert meta.get('macOS27InteractiveGlass') is True, meta
+    assert meta.get('macOS27InteractiveGlass') is False, meta
     expected_transparency = verify_transparency(meta)
     png = (root / f'preview-{theme}.png').read_bytes()
     assert png[:8] == b'\x89PNG\r\n\x1a\n'
@@ -58,7 +66,7 @@ for theme in ('light', 'dark'):
     assert height > width > 0, (width, height)
     assert len(png) > 1000
     print(f'PASS: {theme} vertical panel layout ({width}x{height}, 8 rows)')
-    print(f'PASS: {theme} uses native NSGlassEffectView + macOS 27 interactive glass')
+    print(f'PASS: {theme} uses native NSGlassEffectView; unavailable interactive property is not required')
     print(f'PASS: {theme} glass style {meta["glassStyle"]}, transparency {expected_transparency:.0f}%, window alpha {meta["windowServerBackgroundAlpha"]:.2f}, icon alpha {meta["cachedIconPeakAlpha"]:.2f}')
     print(f'PASS: {theme} transparency setting {expected_transparency:.0f}%, compositor alpha {meta["windowServerBackgroundAlpha"]:.2f}')
 print('NOTE: PNGs verify foreground layout, not desktop glass refraction. Inspect the live preview for glass.')

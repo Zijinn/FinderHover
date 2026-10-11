@@ -16,12 +16,15 @@ trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$STAGE/FinderHover.app/Contents/MacOS" "$STAGE/FinderHover.app/Contents/Resources"
 cp "$ROOT/Info.plist" "$STAGE/FinderHover.app/Contents/Info.plist"
 cp "$ROOT/Assets/AppIcon.icns" "$STAGE/FinderHover.app/Contents/Resources/AppIcon.icns"
-printf 'FinderHover build output\n' > "$STAGE/FinderHover.app/Contents/Resources/finderhover-generated.txt"
+printf 'MacToolbox build output\n' > "$STAGE/FinderHover.app/Contents/Resources/finderhover-generated.txt"
 SDK="$(xcrun --sdk macosx --show-sdk-path)"
 xcrun swiftc -swift-version 5 -O -sdk "$SDK" -target "$(uname -m)-apple-macosx26.0" \
     "$ROOT/Sources/Geometry.swift" "$ROOT/Sources/AccessibilityService.swift" \
-    "$ROOT/Sources/WindowListPanel.swift" "$ROOT/Sources/AppController.swift" "$ROOT/Sources/main.swift" \
-    -framework AppKit -framework ApplicationServices -o "$STAGE/FinderHover.app/Contents/MacOS/FinderHover"
+    "$ROOT/Sources/WindowListPanel.swift" "$ROOT/Sources/PocketStore.swift" \
+    "$ROOT/Sources/ShakeDetector.swift" "$ROOT/Sources/PocketPanel.swift" \
+    "$ROOT/Sources/PocketStatusView.swift" "$ROOT/Sources/ShortcutManager.swift" \
+    "$ROOT/Sources/AppController.swift" "$ROOT/Sources/main.swift" \
+    -framework AppKit -framework ApplicationServices -framework Carbon -o "$STAGE/FinderHover.app/Contents/MacOS/FinderHover"
 plutil -lint "$STAGE/FinderHover.app/Contents/Info.plist"
 codesign --force --sign - --identifier com.zijin.FinderHoverPrototype "$STAGE/FinderHover.app"
 codesign --verify --deep --strict "$STAGE/FinderHover.app"

@@ -4,6 +4,13 @@ import ApplicationServices
 final class AppController: NSObject, NSApplicationDelegate {
     private let service = AccessibilityService()
     private let windowPanel = WindowListPanel()
+    private let pocketStore = PocketStore()
+    private lazy var pocketPanel = PocketPanel(store: pocketStore)
+    private var pocketStatusView: PocketStatusView?
+    private var pocketCountItem: NSMenuItem?
+    private var pocketClearItem: NSMenuItem?
+    private lazy var shortcutManager = ShortcutManager()
+    private var shortcutItem: NSMenuItem?
     private var statusItem: NSStatusItem!
     private var permissionItem: NSMenuItem!
     private var lastActionItem: NSMenuItem!
@@ -60,7 +67,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         }
         if let path = value(after: "--render-preview") {
             showPreview(nil)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.65) {
                 do {
                     let report = try self.windowPanel.renderPNG(to: URL(fileURLWithPath: path))
                     self.writeReport(report, to: path + ".json")
@@ -99,6 +106,12 @@ final class AppController: NSObject, NSApplicationDelegate {
                 }
             return
         }
+        shortcutManager.onTrigger = { [weak self] in
+            DispatchQueue.main.async { self?.showPocket(nil) }
+        }
+        shortcutManager.onChange = { [weak self] shortcut in
+            self?.shortcutItem?.title = "快捷键：\(shortcut.displayName)"
+        }
         configureMenu()
         updatePermission()
         timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in self?.tick() }
@@ -126,19 +139,56 @@ final class AppController: NSObject, NSApplicationDelegate {
         timer?.invalidate()
         if let monitor = clickMonitor { NSEvent.removeMonitor(monitor) }
         windowPanel.hide()
+        pocketPanel.hide()
+        pocketStore.clear()
     }
-
     private func configureMenu() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        let icon = NSImage(systemSymbolName: "rectangle.stack", accessibilityDescription: "访达悬停")
+        guard let button = statusItem.button else { return }
+        let icon = NSImage(systemSymbolName: "rectangle.stack", accessibilityDescription: "Mac工具箱")
         icon?.isTemplate = true
-        statusItem.button?.image = icon
-        statusItem.button?.toolTip = "访达悬停"
+        button.image = nil
+        let statusView = PocketStatusView(image: icon, statusButton: button)
+        statusView.frame = button.bounds
+        button.addSubview(statusView)
+        pocketStatusView = statusView
+        statusView.onShake = { [weak self] in self?.showPocket(nil) }
+        statusView.onDrop = { [weak self] pasteboard in
+            guard let self = self else { return false }
+            return self.pocketStore.addPasteboard(pasteboard) > 0
+        }
+        pocketPanel.onCountChanged = { [weak self] count in
+            self?.pocketStatusView?.setCount(count)
+            self?.pocketCountItem?.title = "口袋：\(count) 项"
+            self?.pocketClearItem?.isEnabled = count > 0
+        }
+        let pocketCount = NSMenuItem(title: "口袋：0 项", action: nil, keyEquivalent: "")
+        pocketCount.isEnabled = false
+        pocketCountItem = pocketCount
+        let pocketOpen = NSMenuItem(title: "打开临时口袋", action: #selector(showPocket), keyEquivalent: "")
+        pocketOpen.target = self
+        let pocketClear = NSMenuItem(title: "清空临时口袋", action: #selector(clearPocket), keyEquivalent: "")
+        pocketClear.target = self
+        pocketClear.isEnabled = false
+        pocketClearItem = pocketClear
+        button.toolTip = "Mac工具箱；晃动图标打开临时口袋"
+
         let menu = NSMenu()
         menu.autoenablesItems = false
-        let heading = NSMenuItem(title: "访达悬停", action: nil, keyEquivalent: "")
+        let heading = NSMenuItem(title: "Mac工具箱", action: nil, keyEquivalent: "")
         heading.isEnabled = false
         menu.addItem(heading)
+        menu.addItem(pocketCount)
+        menu.addItem(pocketOpen)
+        menu.addItem(pocketClear)
+        menu.addItem(.separator())
+        let shortcut = NSMenuItem(title: "快捷键：\(shortcutManager.shortcut.displayName)", action: nil, keyEquivalent: "")
+        shortcut.isEnabled = false
+        shortcutItem = shortcut
+        menu.addItem(shortcut)
+        addMenuItem("设置全局快捷键…", selector: #selector(configureShortcut), to: menu)
+        addMenuItem("恢复默认快捷键（⌥Space）", selector: #selector(resetShortcut), to: menu)
+        menu.addItem(.separator())
         permissionItem = NSMenuItem(title: "检查权限中…", action: nil, keyEquivalent: "")
         permissionItem.isEnabled = false
         menu.addItem(permissionItem)
@@ -175,8 +225,9 @@ final class AppController: NSObject, NSApplicationDelegate {
         lastActionItem.isEnabled = false
         menu.addItem(lastActionItem)
         menu.addItem(.separator())
-        addMenuItem("退出访达悬停", selector: #selector(quit), to: menu)
+        addMenuItem("退出 Mac工具箱", selector: #selector(quit), to: menu)
         statusItem.menu = menu
+        pocketPanel.reload()
     }
 
     private func addMenuItem(_ title: String, selector: Selector, to menu: NSMenu) {
@@ -196,8 +247,8 @@ final class AppController: NSObject, NSApplicationDelegate {
         let previouslyTrusted = permissionGranted
         permissionGranted = service.trusted
         permissionItem?.title = permissionGranted ? "辅助功能：已授权" : "辅助功能：尚未授权"
-        statusItem?.button?.toolTip = permissionGranted ? "访达悬停：移到 Dock 访达图标上试试" :
-            "访达悬停：需要辅助功能权限"
+        statusItem?.button?.toolTip = permissionGranted ? "Mac工具箱：移到 Dock 访达图标上试试；晃动图标打开口袋" :
+            "Mac工具箱：需要辅助功能权限；快捷键可随时打开"
         if !permissionGranted && previouslyTrusted {
             windowPanel.hide()
             gate.reset()
@@ -292,7 +343,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         let bundleID = Bundle.main.bundleIdentifier ?? "unknown"
         let alert = NSAlert()
         alert.messageText = "需要开启辅助功能权限"
-        alert.informativeText = "请在“系统设置 → 隐私与安全性 → 辅助功能”中添加并开启当前这个应用：\n\n访达悬停\n\(appPath)\n\nBundle ID：\(bundleID)\n\n授权后点击菜单栏中的“重新检测权限”，或重新打开应用。列表中可能显示为“FinderHover”而不是“访达悬停”。"
+        alert.informativeText = "请在“系统设置 → 隐私与安全性 → 辅助功能”中添加并开启当前这个应用：\n\nMac工具箱\n\(appPath)\n\nBundle ID：\(bundleID)\n\n授权后点击菜单栏中的“重新检测权限”，或重新打开应用。内部程序名可能显示为 FinderHover。"
         alert.addButton(withTitle: "打开辅助功能设置")
         alert.addButton(withTitle: "复制当前路径")
         alert.addButton(withTitle: "稍后")
@@ -305,6 +356,30 @@ final class AppController: NSObject, NSApplicationDelegate {
         }
     }
 
+    @objc private func showPocket(_ sender: Any?) {
+        windowPanel.hide()
+        pocketPanel.show(near: pocketStatusView?.statusFrameInScreen())
+    }
+
+    @objc private func clearPocket(_ sender: Any?) {
+        pocketStore.clear()
+    }
+
+    @objc private func configureShortcut(_ sender: Any?) {
+        NSApp.activate(ignoringOtherApps: true)
+        shortcutManager.presentRecorder()
+        shortcutItem?.title = "快捷键：\(shortcutManager.shortcut.displayName)"
+    }
+
+    @objc private func resetShortcut(_ sender: Any?) {
+        shortcutManager.reset()
+        shortcutItem?.title = "快捷键：\(shortcutManager.shortcut.displayName)"
+    }
+
+    private func addPocketFiles(_ urls: [URL]) {
+        _ = pocketStore.addURLs(urls)
+        showPocket(nil)
+    }
     @objc private func openPermissionSettings(_ sender: Any?) {
         service.requestPermission()
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
@@ -317,8 +392,8 @@ final class AppController: NSObject, NSApplicationDelegate {
     @objc private func saveDiagnostic(_ sender: Any?) {
         NSApp.activate(ignoringOtherApps: true)
         let picker = NSSavePanel()
-        picker.nameFieldStringValue = "FinderHover-诊断.json"
-        picker.title = "保存访达悬停诊断报告"
+        picker.nameFieldStringValue = "Mac工具箱-诊断.json"
+        picker.title = "保存 Mac工具箱诊断报告"
         if picker.runModal() == .OK, let url = picker.url {
             writeReport(service.diagnostic(), to: url.path)
         }
