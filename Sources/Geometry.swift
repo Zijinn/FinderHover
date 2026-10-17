@@ -74,18 +74,18 @@ struct PanelGeometry {
     }
 
     static func frame(size: CGSize, icon: CGRect, visibleScreen: CGRect,
-                      edge: DockEdge) -> CGRect {
+                      edge: DockEdge, gap: CGFloat = 10) -> CGRect {
         let safe = visibleScreen.insetBy(dx: 8, dy: 8)
         let width = min(size.width, safe.width)
         let height = min(size.height, safe.height)
         var origin: CGPoint
         switch edge {
         case .bottom:
-            origin = CGPoint(x: icon.midX - width / 2, y: icon.maxY + 10)
+            origin = CGPoint(x: icon.midX - width / 2, y: icon.maxY + gap)
         case .left:
-            origin = CGPoint(x: icon.maxX + 10, y: icon.midY - height / 2)
+            origin = CGPoint(x: icon.maxX + gap, y: icon.midY - height / 2)
         case .right:
-            origin = CGPoint(x: icon.minX - width - 10, y: icon.midY - height / 2)
+            origin = CGPoint(x: icon.minX - width - gap, y: icon.midY - height / 2)
         }
         origin.x = min(max(origin.x, safe.minX), safe.maxX - width)
         origin.y = min(max(origin.y, safe.minY), safe.maxY - height)

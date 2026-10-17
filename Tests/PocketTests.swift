@@ -41,6 +41,29 @@ struct PocketTests {
         _ = detector.update(point: CGPoint(x: 120, y: 100), inside: false, now: 0.2)
         check("leaving hit area resets a partial sequence", !shake(&detector, points: [(100, 0.3), (120, 0.4), (100, 0.5), (120, 0.6)]))
 
+        // The status view now feeds detection from a single ProcessInfo.systemUptime clock,
+        // so the detector must behave identically at a large uptime-style base than at zero.
+        let uptimeBase: TimeInterval = 50_000
+        detector.reset()
+        check("full round trip at uptime base triggers",
+              shake(&detector, points: [(100, uptimeBase), (120, uptimeBase + 0.1), (100, uptimeBase + 0.2), (120, uptimeBase + 0.3), (100, uptimeBase + 0.4)]))
+        check("cooldown at uptime base blocks an immediate retrigger",
+              !shake(&detector, points: [(120, uptimeBase + 0.5), (100, uptimeBase + 0.6), (120, uptimeBase + 0.7), (100, uptimeBase + 0.8)]))
+        check("shake works again once the cooldown expires",
+              shake(&detector, points: [(100, uptimeBase + 1.0), (120, uptimeBase + 1.1), (100, uptimeBase + 1.2), (120, uptimeBase + 1.3), (100, uptimeBase + 1.4)]))
+        detector.reset()
+        _ = detector.update(point: CGPoint(x: 100, y: 100), inside: true, now: uptimeBase)
+        _ = detector.update(point: CGPoint(x: 120, y: 100), inside: true, now: uptimeBase + 0.1)
+        _ = detector.update(point: CGPoint(x: 120, y: 100), inside: false, now: uptimeBase + 0.2)
+        check("leaving hit area at uptime base resets a partial sequence",
+              !shake(&detector, points: [(100, uptimeBase + 0.3), (120, uptimeBase + 0.4), (100, uptimeBase + 0.5), (120, uptimeBase + 0.6)]))
+        detector.reset()
+        check("single direction at uptime base does not trigger",
+              !shake(&detector, points: [(100, uptimeBase), (120, uptimeBase + 0.1), (140, uptimeBase + 0.2), (160, uptimeBase + 0.3), (180, uptimeBase + 0.4)]))
+        detector.reset()
+        check("slow shake at uptime base does not trigger",
+              !shake(&detector, points: [(100, uptimeBase), (120, uptimeBase + 0.3), (95, uptimeBase + 0.7), (120, uptimeBase + 1.1), (95, uptimeBase + 1.5)]))
+
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("FinderHover-PocketTest-\(UUID().uuidString)")
         try! FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let source = root.appendingPathComponent("source.txt")

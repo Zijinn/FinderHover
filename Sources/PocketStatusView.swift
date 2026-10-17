@@ -4,9 +4,9 @@ import Foundation
 private let pocketDataType = NSPasteboard.PasteboardType("public.data")
 
 final class PocketStatusView: NSView {
-    var onClick: (() -> Void)?
     var onShake: (() -> Void)?
     var onDrop: ((NSPasteboard) -> Bool)?
+    var onDropCompleted: (() -> Void)?
     private weak var statusButton: NSStatusBarButton?
     private var icon: NSImage?
     private var count = 0
@@ -18,6 +18,8 @@ final class PocketStatusView: NSView {
     private var globalMouseMonitor: Any?
     private var lastShakeTime: TimeInterval = -Double.greatestFiniteMagnitude
 
+    var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
+
     init(image: NSImage?, statusButton: NSStatusBarButton) {
         self.icon = image
         self.statusButton = statusButton
@@ -28,12 +30,12 @@ final class PocketStatusView: NSView {
         let options: NSTrackingArea.Options = [.mouseEnteredAndExited, .activeAlways, .inVisibleRect]
         addTrackingArea(NSTrackingArea(rect: .zero, options: options, owner: self))
         localMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { [weak self] event in
-            self?.observe(point: NSEvent.mouseLocation, now: event.timestamp)
+            self?.observe(point: NSEvent.mouseLocation)
             return event
         }
-        globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved) { [weak self] event in
+        globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved) { [weak self] _ in
             let point = NSEvent.mouseLocation
-            DispatchQueue.main.async { self?.observe(point: point, now: event.timestamp) }
+            DispatchQueue.main.async { self?.observe(point: point) }
         }
         toolTip = "在图标附近快速左右晃动两次打开口袋；也可拖入文件"
     }
@@ -77,31 +79,32 @@ final class PocketStatusView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        if let button = statusButton { button.performClick(nil) }
-        else { onClick?() }
+        statusButton?.performClick(nil)
     }
 
     override func mouseExited(with event: NSEvent) {
-        _ = shakeDetector.update(point: NSEvent.mouseLocation, inside: false, now: event.timestamp)
+        _ = shakeDetector.update(point: NSEvent.mouseLocation, inside: false, now: now)
     }
 
-    private func observe(point: CGPoint, now: TimeInterval) {
+    private func observe(point: CGPoint) {
         let hit = statusFrameInScreen().insetBy(dx: -12, dy: -10).contains(point)
-        if shakeDetector.update(point: point, inside: hit, now: now) {
-            guard now - lastShakeTime >= 0.9 else { return }
-            lastShakeTime = now
+        let current = now
+        if shakeDetector.update(point: point, inside: hit, now: current) {
+            guard current - lastShakeTime >= 0.9 else { return }
+            lastShakeTime = current
             onShake?()
         }
     }
 
+    // Dragging updates never feed the shake detector: fast horizontal motion while
+    // dragging over the icon would otherwise be read as a shake and pop the panel
+    // over the drop target.
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        observe(point: sender.draggingLocation, now: ProcessInfo.processInfo.systemUptime)
         guard sender.draggingPasteboard.availableType(from: [.fileURL, .URL, .png, .tiff, pocketDataType]) != nil else { return [] }
         return .copy
     }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        observe(point: sender.draggingLocation, now: ProcessInfo.processInfo.systemUptime)
         return sender.draggingPasteboard.availableType(from: [.fileURL, .URL, .png, .tiff, pocketDataType]) != nil ? .copy : []
     }
 
@@ -111,7 +114,7 @@ final class PocketStatusView: NSView {
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         let accepted = onDrop?(sender.draggingPasteboard) ?? false
-        if accepted { onShake?() }
+        if accepted { onDropCompleted?() }
         return accepted
     }
 }
