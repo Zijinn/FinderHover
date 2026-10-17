@@ -1,25 +1,33 @@
 import AppKit
 import ApplicationServices
 
-struct FinderWindow {
-    let element: AXUIElement?
-    let title: String
-    let minimized: Bool
-}
-
-struct DockItem {
-    let element: AXUIElement
-    let axFrame: CGRect
-    let title: String
-}
-
 struct FocusResult {
     let success: Bool
     let message: String
 }
 
+/// A Dock item that names an application which is currently running, resolved to
+/// the process whose windows we can list and focus.
+struct DockAppHit {
+    let element: AXUIElement
+    let axFrame: CGRect
+    let bundleIdentifier: String
+    let pid: pid_t
+    let displayName: String
+    let url: URL
+}
+
+struct WindowReadout {
+    let windows: [AppWindow]
+    let switchableCount: Int
+    let omittedCount: Int
+    let error: String?
+
+    static let unavailable = WindowReadout(windows: [], switchableCount: 0, omittedCount: 0,
+                                           error: "尚未授予辅助功能权限")
+}
+
 final class AccessibilityService {
-    static let finderPath = "/System/Library/CoreServices/Finder.app"
     var trusted: Bool { AXIsProcessTrusted() }
     private var cachedDockPID: pid_t = 0
     private var cachedDock: AXUIElement?
@@ -41,43 +49,8 @@ final class AccessibilityService {
         attribute(element, name) as? String ?? ""
     }
 
-    private func application(_ identifier: String) -> NSRunningApplication? {
-        NSRunningApplication.runningApplications(withBundleIdentifier: identifier).first
-    }
-
-    private func dockApplication() -> AXUIElement? {
-        guard let app = application("com.apple.dock") else { return nil }
-        if app.processIdentifier != cachedDockPID || cachedDock == nil {
-            cachedDockPID = app.processIdentifier
-            cachedDock = AXUIElementCreateApplication(app.processIdentifier)
-            if let dock = cachedDock { AXUIElementSetMessagingTimeout(dock, 0.15) }
-        }
-        return cachedDock
-    }
-
-    func windows() -> (windows: [FinderWindow], error: String?) {
-        guard trusted else { return ([], "尚未授予辅助功能权限") }
-        guard let finder = application("com.apple.finder") else {
-            return ([], "访达未运行")
-        }
-        let app = AXUIElementCreateApplication(finder.processIdentifier)
-        AXUIElementSetMessagingTimeout(app, 0.3)
-        var value: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value)
-        guard result == .success, let elements = value as? [AXUIElement] else {
-            return ([], "读取访达窗口失败（AX \(result.rawValue)）")
-        }
-        let windows = elements.compactMap { element -> FinderWindow? in
-            let role = text(element, kAXRoleAttribute)
-            let subrole = text(element, kAXSubroleAttribute)
-            guard role == kAXWindowRole,
-                  subrole.isEmpty || subrole == kAXStandardWindowSubrole else { return nil }
-            let title = text(element, kAXTitleAttribute).trimmingCharacters(in: .whitespacesAndNewlines)
-            let minimized = attribute(element, kAXMinimizedAttribute) as? Bool ?? false
-            return FinderWindow(element: element, title: title.isEmpty ? "未命名访达窗口" : title,
-                                minimized: minimized)
-        }
-        return (windows, nil)
+    private func children(_ element: AXUIElement) -> [AXUIElement] {
+        attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? []
     }
 
     private func rect(_ element: AXUIElement) -> CGRect? {
@@ -93,52 +66,157 @@ final class AccessibilityService {
         return CGRect(origin: point, size: dimensions)
     }
 
-    private func finderItem(_ element: AXUIElement) -> DockItem? {
-        let role = text(element, kAXRoleAttribute)
-        let subrole = text(element, kAXSubroleAttribute)
-        guard role == "AXDockItem" || subrole == "AXApplicationDockItem" else { return nil }
-        let title = text(element, kAXTitleAttribute)
-        let url = attribute(element, kAXURLAttribute) as? URL
-        let localizedName = application("com.apple.finder")?.localizedName ?? "Finder"
-        let knownName = ["Finder", "访达", "訪達", localizedName].contains(title)
-        let correctURL = url?.standardizedFileURL.path == Self.finderPath
-        guard correctURL || (url == nil && knownName), let frame = rect(element) else { return nil }
-        return DockItem(element: element, axFrame: frame, title: title)
+    private func dockApplication() -> AXUIElement? {
+        guard let dock = NSRunningApplication
+            .runningApplications(withBundleIdentifier: "com.apple.dock").first else { return nil }
+        if dock.processIdentifier != cachedDockPID || cachedDock == nil {
+            cachedDockPID = dock.processIdentifier
+            cachedDock = AXUIElementCreateApplication(dock.processIdentifier)
+            if let dock = cachedDock { AXUIElementSetMessagingTimeout(dock, 0.15) }
+        }
+        return cachedDock
     }
 
-    func finderItem(at point: CGPoint) -> DockItem? {
+    // MARK: - Dock item identification
+
+    private func facts(_ element: AXUIElement) -> DockItemFacts {
+        let url = attribute(element, kAXURLAttribute) as? URL
+        let path = url?.standardizedFileURL.path
+        return DockItemFacts(role: text(element, kAXRoleAttribute),
+                             subrole: text(element, kAXSubroleAttribute),
+                             urlPath: path,
+                             title: text(element, kAXTitleAttribute),
+                             bundleIdentifier: url.flatMap { Bundle(url: $0)?.bundleIdentifier })
+    }
+
+    /// A Dock item only becomes usable once it names an installed bundle that is
+    /// running; pinned-but-quit icons and stacks resolve to nothing here.
+    private func hit(_ element: AXUIElement, facts itemFacts: DockItemFacts? = nil) -> DockAppHit? {
+        let facts = itemFacts ?? self.facts(element)
+        guard DockItemClassifier.classify(facts) == .application,
+              let frame = rect(element) else { return nil }
+        let running: NSRunningApplication?
+        if let identifier = facts.bundleIdentifier {
+            running = NSRunningApplication.runningApplications(withBundleIdentifier: identifier).first
+        } else {
+            let title = facts.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            running = NSWorkspace.shared.runningApplications.first {
+                $0.activationPolicy == .regular && $0.localizedName == title
+            }
+        }
+        guard let app = running, let url = app.bundleURL,
+              let identifier = app.bundleIdentifier else { return nil }
+        return DockAppHit(element: element, axFrame: frame, bundleIdentifier: identifier,
+                          pid: app.processIdentifier,
+                          displayName: app.localizedName ?? facts.title, url: url)
+    }
+
+    private func dockItemElements(_ dock: AXUIElement) -> [AXUIElement] {
+        var found: [AXUIElement] = []
+        var remaining = 900
+        func visit(_ element: AXUIElement, depth: Int) {
+            guard remaining > 0, depth <= 5 else { return }
+            remaining -= 1
+            if text(element, kAXRoleAttribute) == kAXDockItemRole { found.append(element) }
+            else { children(element).forEach { visit($0, depth: depth + 1) } }
+        }
+        visit(dock, depth: 0)
+        return found
+    }
+
+    func appItem(at point: CGPoint) -> DockAppHit? {
         guard trusted, let dock = dockApplication() else { return nil }
-        var hit: AXUIElement?
-        guard AXUIElementCopyElementAtPosition(dock, Float(point.x), Float(point.y), &hit) == .success,
-              var current = hit else { return nil }
-        for _ in 0..<5 {
-            if let item = finderItem(current) { return item }
-            guard let parent = attribute(current, kAXParentAttribute),
-                  CFGetTypeID(parent) == AXUIElementGetTypeID() else { break }
-            current = parent as! AXUIElement
+        var direct: AXUIElement?
+        if AXUIElementCopyElementAtPosition(dock, Float(point.x), Float(point.y), &direct) == .success,
+           var current = direct {
+            for _ in 0..<5 {
+                if let hit = hit(current) { return hit }
+                guard let parent = attribute(current, kAXParentAttribute),
+                      CFGetTypeID(parent) == AXUIElementGetTypeID() else { break }
+                current = parent as! AXUIElement
+            }
+        }
+        // Dock magnification relays out icons while the cursor sits on one, so the
+        // position query above can miss; fall back to matching each item's own frame.
+        for element in dockItemElements(dock) {
+            guard rect(element).map({ $0.contains(point) }) == true else { continue }
+            if let hit = hit(element) { return hit }
         }
         return nil
     }
 
-    func locateFinderItem() -> DockItem? {
+    func appItem(bundleIdentifier: String) -> DockAppHit? {
         guard trusted, let dock = dockApplication() else { return nil }
-        var remaining = 180
-        func visit(_ element: AXUIElement, depth: Int) -> DockItem? {
-            guard remaining > 0, depth <= 5 else { return nil }
-            remaining -= 1
-            if let match = finderItem(element) { return match }
-            let children = attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? []
-            for child in children {
-                if let match = visit(child, depth: depth + 1) { return match }
-            }
-            return nil
+        for element in dockItemElements(dock) where facts(element).bundleIdentifier == bundleIdentifier {
+            if let hit = hit(element) { return hit }
         }
-        return visit(dock, depth: 0)
+        return nil
     }
 
-    func focus(_ window: FinderWindow) -> FocusResult {
+    /// Dock items the user can hover over right now, for the enabled-app picker.
+    func currentDockAppItems() -> [DockAppHit] {
+        guard trusted, let dock = dockApplication() else { return [] }
+        var seen = Set<String>()
+        return dockItemElements(dock).compactMap { element -> DockAppHit? in
+            guard let hit = hit(element), !seen.contains(hit.bundleIdentifier) else { return nil }
+            seen.insert(hit.bundleIdentifier)
+            return hit
+        }
+    }
+
+    // MARK: - Windows
+
+    private func windowFacts(_ elements: [AXUIElement]) -> [WindowFacts] {
+        elements.enumerated().map { index, element in
+            let frame = rect(element) ?? .zero
+            return WindowFacts(index: index,
+                               role: text(element, kAXRoleAttribute),
+                               subrole: text(element, kAXSubroleAttribute),
+                               title: text(element, kAXTitleAttribute),
+                               minimized: attribute(element, kAXMinimizedAttribute) as? Bool ?? false,
+                               isMain: attribute(element, kAXMainAttribute) as? Bool ?? false,
+                               isFocused: attribute(element, kAXFocusedAttribute) as? Bool ?? false,
+                               width: frame.width, height: frame.height)
+        }
+    }
+
+    func windows(of app: DockAppHit, config: AppWindowConfig) -> WindowReadout {
+        guard trusted else { return .unavailable }
+        let element = AXUIElementCreateApplication(app.pid)
+        AXUIElementSetMessagingTimeout(element, 0.3)
+        var value: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(element, kAXWindowsAttribute as CFString, &value)
+        guard result == .success, let elements = value as? [AXUIElement] else {
+            return WindowReadout(windows: [], switchableCount: 0, omittedCount: 0,
+                                 error: "读取 \(app.displayName) 窗口失败（AX \(result.rawValue)）")
+        }
+        let presentation = WindowPresentationRules.present(windowFacts(elements), config: config)
+        let windows = presentation.rows.compactMap { row -> AppWindow? in
+            guard elements.indices.contains(row.sourceIndex) else { return nil }
+            return AppWindow(element: elements[row.sourceIndex], displayTitle: row.displayTitle,
+                             minimized: row.minimized, isMain: row.isMain)
+        }
+        return WindowReadout(windows: windows, switchableCount: presentation.switchableCount,
+                             omittedCount: presentation.omittedCount, error: nil)
+    }
+
+    /// Windows of the application currently in front, used by the manual menu entry
+    /// when the pointer is nowhere near the Dock. `axFrame` stays empty because no
+    /// Dock item backs it, and the caller then falls back to its own anchor.
+    func frontmostAppWindows(config: AppWindowConfig) -> (hit: DockAppHit, readout: WindowReadout)? {
+        guard let app = NSWorkspace.shared.frontmostApplication,
+              let identifier = app.bundleIdentifier,
+              let url = app.bundleURL else { return nil }
+        let hit = DockAppHit(element: AXUIElementCreateApplication(app.processIdentifier),
+                             axFrame: .zero, bundleIdentifier: identifier,
+                             pid: app.processIdentifier,
+                             displayName: app.localizedName ?? identifier, url: url)
+        return (hit, windows(of: hit, config: config))
+    }
+
+    func focus(_ window: AppWindow, in app: DockAppHit) -> FocusResult {
         guard trusted, let element = window.element,
-              let finder = application("com.apple.finder") else {
+              let running = NSRunningApplication(processIdentifier: app.pid) else {
             return FocusResult(success: false, message: "缺少辅助功能权限或窗口已失效")
         }
         var probe: CFTypeRef?
@@ -153,42 +231,60 @@ final class AccessibilityService {
                 return FocusResult(success: false, message: "无法恢复最小化窗口（AX \(restored.rawValue)）")
             }
         }
-        let activated = finder.activate(options: [])
+        let activated = running.activate(options: [])
         let main = AXUIElementSetAttributeValue(element, kAXMainAttribute as CFString, kCFBooleanTrue)
         let focused = AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
         let raised = AXUIElementPerformAction(element, kAXRaiseAction as CFString)
         let success = activated && (raised == .success || main == .success || focused == .success)
         return FocusResult(success: success,
-                           message: success ? "已切换到：\(window.title)" :
+                           message: success ? "已切换到：\(app.displayName) · \(window.displayTitle)" :
                             "窗口切换失败（激活 \(activated)，AXRaise \(raised.rawValue)）")
     }
 
-    func isMain(_ window: FinderWindow) -> Bool {
+    func isMain(_ window: AppWindow) -> Bool {
         guard let element = window.element else { return false }
         return attribute(element, kAXMainAttribute) as? Bool ?? false
     }
 
-    func diagnostic() -> [String: Any] {
-        let result = windows()
-        let item = locateFinderItem()
-        var report: [String: Any] = [
+    // MARK: - Diagnostics
+
+    func diagnostic(settings: SettingsStore, managedApps: [ManagedApp]) -> [String: Any] {
+        let dockItems = currentDockAppItems()
+        let enabled = managedApps.filter { $0.isEnabled }
+        var perApp: [[String: Any]] = []
+        for app in enabled {
+            guard let item = dockItems.first(where: { $0.bundleIdentifier == app.bundleIdentifier }) else {
+                perApp.append(["bundleIdentifier": app.bundleIdentifier, "name": app.displayName,
+                               "inDock": false])
+                continue
+            }
+            let readout = windows(of: item, config: app.config)
+            var entry: [String: Any] = ["bundleIdentifier": app.bundleIdentifier,
+                                        "name": app.displayName, "inDock": true,
+                                        "switchableWindowCount": readout.switchableCount,
+                                        "listedWindowCount": readout.windows.count]
+            if let error = readout.error { entry["error"] = error }
+            if !readout.windows.isEmpty {
+                entry["firstTitles"] = readout.windows.prefix(3).map { $0.displayTitle }
+            }
+            perApp.append(entry)
+        }
+        let report: [String: Any] = [
             "timestamp": ISO8601DateFormatter().string(from: Date()),
             "macOS": ProcessInfo.processInfo.operatingSystemVersionString,
             "bundleIdentifier": Bundle.main.bundleIdentifier ?? "unbundled",
             "appVersion": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
             "accessibilityTrusted": trusted,
-            "finderRunning": application("com.apple.finder") != nil,
-            "dockRunning": application("com.apple.dock") != nil,
-            "windowCount": result.windows.count,
-            "windows": result.windows.map { ["title": $0.title, "minimized": $0.minimized] as [String: Any] },
-            "dockFinderItemFound": item != nil
+            "dockRunning": NSRunningApplication
+                .runningApplications(withBundleIdentifier: "com.apple.dock").first != nil,
+            "windowSwitcherEnabled": settings.isToolEnabled(.windowSwitcher),
+            "pocketEnabled": settings.isToolEnabled(.pocket),
+            "dockAppItemCount": dockItems.count,
+            "dockApps": dockItems.map { ["bundleIdentifier": $0.bundleIdentifier, "name": $0.displayName] },
+            "managedAppCount": managedApps.count,
+            "enabledAppCount": enabled.count,
+            "enabledApps": perApp
         ]
-        if let error = result.error { report["windowReadError"] = error }
-        if let item = item {
-            report["dockFinderTitle"] = item.title
-            report["dockFinderAXFrame"] = ["x": item.axFrame.minX, "y": item.axFrame.minY,
-                                           "width": item.axFrame.width, "height": item.axFrame.height]
-        }
         return report
     }
 }

@@ -22,8 +22,6 @@ final class PocketPanel: NSObject {
     private var selectedIDs = Set<UUID>()
     private let panelSize = NSSize(width: 360, height: 430)
 
-    var onItemsAdded: (() -> Void)?
-    var onClear: (() -> Void)?
     var onCountChanged: ((Int) -> Void)?
     var isVisible: Bool { window.isVisible }
     var frame: NSRect { window.frame }
@@ -158,7 +156,6 @@ final class PocketPanel: NSObject {
         let added = store.addPasteboard(pasteboard)
         if added > 0 {
             messageLabel.stringValue = "已收纳 \(added) 项"
-            onItemsAdded?()
             return true
         }
         messageLabel.stringValue = "没有可收纳的文件或图片"
@@ -171,13 +168,11 @@ final class PocketPanel: NSObject {
         store.clear()
         selectedIDs.removeAll()
         messageLabel.stringValue = "口袋已清空"
-        onClear?()
     }
 
     @objc private func importClipboardImage() {
         if store.addImageFromPasteboard(.general) != nil {
             messageLabel.stringValue = "已收纳剪贴板图片"
-            onItemsAdded?()
         } else {
             messageLabel.stringValue = "剪贴板中没有可用图片"
         }

@@ -19,6 +19,7 @@ cp "$ROOT/Assets/AppIcon.icns" "$STAGE/FinderHover.app/Contents/Resources/AppIco
 printf 'MacToolbox build output\n' > "$STAGE/FinderHover.app/Contents/Resources/finderhover-generated.txt"
 SDK="$(xcrun --sdk macosx --show-sdk-path)"
 xcrun swiftc -swift-version 5 -O -sdk "$SDK" -target "$(uname -m)-apple-macosx26.0" \
+    "$ROOT/Sources/AppModel.swift" "$ROOT/Sources/SettingsStore.swift" \
     "$ROOT/Sources/Geometry.swift" "$ROOT/Sources/AccessibilityService.swift" \
     "$ROOT/Sources/WindowListPanel.swift" "$ROOT/Sources/PocketStore.swift" \
     "$ROOT/Sources/ShakeDetector.swift" "$ROOT/Sources/PocketPanel.swift" \
