@@ -1,4 +1,5 @@
 import AppKit
+import Security
 
 /// Facts about where this process is running from.
 ///
@@ -16,6 +17,29 @@ enum AppInstallation {
     /// Running straight out of a mounted disk image gives a randomised path under
     /// `/AppTranslocation/`; a grant made there dies with the session.
     static var isTranslocated: Bool { path.contains("/AppTranslocation/") }
+
+    /// `adhoc` means the binary carries no identity, so the Accessibility grant is
+    /// keyed to its hash and dies on the next rebuild or reinstall. This is the
+    /// difference between "the app is broken" and "this copy is signed wrong", and it
+    /// is invisible from the UI without asking the code signing machinery.
+    static var signatureKind: String {
+        var code: SecCode?
+        guard SecCodeCopySelf([], &code) == errSecSuccess, let code = code else { return "unknown" }
+        var staticCode: SecStaticCode?
+        guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess,
+              let staticCode = staticCode else { return "unknown" }
+        var information: CFDictionary?
+        guard SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation),
+                                            &information) == errSecSuccess,
+              let dictionary = information as? [String: Any] else { return "unknown" }
+        let flags = (dictionary[kSecCodeInfoFlags as String] as? NSNumber)?.uint32Value ?? 0
+        let isAdHoc = flags & 0x2 != 0
+        if isAdHoc { return "adhoc" }
+        let certificates = dictionary[kSecCodeInfoCertificates as String] as? [Any]
+        return (certificates?.isEmpty ?? true) ? "unknown" : "certificate"
+    }
+
+    static var isAdHocSigned: Bool { signatureKind == "adhoc" }
 
     /// Other copies of the same bundle on disk. Returns absolute paths, sorted.
     static func duplicateCopies() -> [String] {

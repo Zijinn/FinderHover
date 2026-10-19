@@ -29,7 +29,7 @@ xcrun swiftc -swift-version 5 -O -sdk "$SDK" -target "$(uname -m)-apple-macosx26
     "$ROOT/Sources/PocketStatusView.swift" "$ROOT/Sources/ShortcutManager.swift" \
     "$ROOT/Sources/PermissionWindow.swift" "$ROOT/Sources/SettingsWindow.swift" \
     "$ROOT/Sources/AppController.swift" "$ROOT/Sources/main.swift" \
-    -framework AppKit -framework ApplicationServices -framework Carbon -o "$STAGE/FinderHover.app/Contents/MacOS/FinderHover"
+    -framework AppKit -framework ApplicationServices -framework Carbon -framework Security -o "$STAGE/FinderHover.app/Contents/MacOS/FinderHover"
 plutil -lint "$STAGE/FinderHover.app/Contents/Info.plist"
 # Ad-hoc signatures are keyed to the binary hash, so every rebuild silently revokes
 # the Accessibility grant. Any real certificate (self-signed or Apple Development)

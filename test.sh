@@ -110,12 +110,13 @@ print('NOTE: PNGs verify foreground layout, not desktop glass refraction. Inspec
 diagnostic = json.loads((root / 'diagnostics.json').read_text())
 for key in ('accessibilityTrusted', 'dockRunning', 'windowSwitcherEnabled', 'pocketEnabled',
             'dockAppItemCount', 'dockApps', 'managedAppCount', 'enabledAppCount', 'enabledApps',
-            'bundlePath', 'executableName', 'translocated', 'duplicateCopies'):
+            'bundlePath', 'executableName', 'translocated', 'signature', 'duplicateCopies'):
     assert key in diagnostic, sorted(diagnostic)
 assert diagnostic['dockRunning'] is True, diagnostic
 assert isinstance(diagnostic['dockApps'], list), diagnostic
 assert isinstance(diagnostic['duplicateCopies'], list), diagnostic
 assert diagnostic['bundlePath'].endswith(diagnostic['executableName']), diagnostic
+assert diagnostic['signature'] in ('adhoc', 'certificate'), diagnostic
 assert diagnostic['managedAppCount'] >= len(diagnostic['enabledApps']), diagnostic
 print('Accessibility trusted:', diagnostic['accessibilityTrusted'])
 print('Running from:', diagnostic['bundlePath'])

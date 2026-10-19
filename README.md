@@ -102,6 +102,8 @@ Xcode → Settings（⌘,）→ Accounts → 左下角「+」→ Apple ID 登录
 
 建好证书后运行 `./build.sh --install`，再在系统设置里授权一次即可；此后重编译不用再动开关。
 
+**注意**：GitHub Actions 上没有这张证书，Release 里的 DMG 是 ad-hoc 签名的。如果你把 Release 包下载回来覆盖本地安装，等于把证书签名版本换成了 ad-hoc 版本，之前授予的辅助功能权限会立刻失效。自己日常使用请用 `./build.sh --install`；`--diagnose` 的 `signature` 字段会直接显示当前副本是 `adhoc` 还是 `certificate`。
+
 ## 图标
 
 图标由 `tools/IconRenderer.swift` 用 Core Graphics 直接绘制，不依赖外部素材，任意尺寸都是矢量渲染而不是缩放位图：

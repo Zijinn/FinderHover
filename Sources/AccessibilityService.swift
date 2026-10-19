@@ -280,6 +280,7 @@ final class AccessibilityService {
             "bundlePath": AppInstallation.path,
             "executableName": AppInstallation.fileName,
             "translocated": AppInstallation.isTranslocated,
+            "signature": AppInstallation.signatureKind,
             "duplicateCopies": AppInstallation.duplicateCopies(),
             "accessibilityTrusted": trusted,
             "dockRunning": NSRunningApplication

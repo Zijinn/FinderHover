@@ -215,6 +215,10 @@ final class PermissionWindowController: NSObject, NSWindowDelegate {
                 tipBox.fillColor = NSColor.systemOrange.withAlphaComponent(0.12)
                 tipLabel.textColor = .labelColor
                 tipLabel.stringValue = "当前从磁盘映像运行。授权会绑定到临时路径，退出后失效 —— 请先把 \(AppInstallation.fileName) 拖到「应用程序」文件夹，再从那里打开。"
+            } else if AppInstallation.isAdHocSigned {
+                tipBox.fillColor = NSColor.systemOrange.withAlphaComponent(0.12)
+                tipLabel.textColor = .labelColor
+                tipLabel.stringValue = "当前副本是 ad-hoc 签名，没有固定身份：授权绑定在文件哈希上，重新安装或更新后就会失效。请使用带证书签名的构建版本。"
             } else if !duplicates.isEmpty {
                 tipBox.fillColor = NSColor.systemOrange.withAlphaComponent(0.12)
                 tipLabel.textColor = .labelColor
