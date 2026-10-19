@@ -136,7 +136,7 @@ if not diagnostic['accessibilityTrusted']:
 menu_report = json.loads((root / 'menu.json').read_text())
 for key in ('menuBuilt', 'statusItemHasMenu', 'menuDelegateIsController', 'sectionHeadingsPresent',
             'settingsEntryPresent', 'settingsWindowConstructed', 'settingsSidebarComplete',
-            'settingsAppRowsMatchManagedApps', 'settingsAppearanceSlidersComplete',
+            'settingsAppRowsMatchManagedApps', 'settingsAppearanceSlidersComplete', 'settingsBulkSelectPresent',
             'permissionNoteMatchesState', 'pocketPanelConstructed'):
     assert menu_report.get(key) is True, (key, menu_report)
 assert menu_report['actionItemsMissingTarget'] == 0, menu_report

@@ -356,10 +356,31 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         let installed = hooks.installedApps()
         let apps = settings.managedApps(installed: installed)
         page.addSubview(UIKitBits.label("启用哪些应用", size: 12, weight: .medium,
-                                        frame: NSRect(x: contentX, y: 190, width: 240, height: 18)))
-        page.addSubview(UIKitBits.label("\(apps.filter { $0.isEnabled }.count) / \(apps.count) 已启用",
-                                        size: 11, color: .secondaryLabelColor,
-                                        frame: NSRect(x: contentX + 360, y: 190, width: 152, height: 18)))
+                                        frame: NSRect(x: contentX, y: 190, width: 130, height: 18)))
+
+        let selectAll = NSButton(title: "全选", target: self, action: #selector(selectAllApps))
+        selectAll.bezelStyle = .inline
+        selectAll.isBordered = false
+        selectAll.font = .systemFont(ofSize: 11)
+        selectAll.contentTintColor = .controlAccentColor
+        selectAll.frame = NSRect(x: contentX + 136, y: 186, width: 40, height: 22)
+        selectAll.setAccessibilityHelp("启用列表里的全部应用")
+        page.addSubview(selectAll)
+
+        let selectNone = NSButton(title: "全不选", target: self, action: #selector(selectNoneApps))
+        selectNone.bezelStyle = .inline
+        selectNone.isBordered = false
+        selectNone.font = .systemFont(ofSize: 11)
+        selectNone.contentTintColor = .secondaryLabelColor
+        selectNone.frame = NSRect(x: contentX + 182, y: 186, width: 52, height: 22)
+        selectNone.setAccessibilityHelp("关闭列表里的全部应用")
+        page.addSubview(selectNone)
+
+        let enabledCount = UIKitBits.label("\(apps.filter { $0.isEnabled }.count) / \(apps.count) 已启用",
+                                           size: 11, color: .secondaryLabelColor,
+                                           frame: NSRect(x: contentX + 360, y: 190, width: 152, height: 18))
+        enabledCount.alignment = .right
+        page.addSubview(enabledCount)
 
         let scroll = NSScrollView(frame: NSRect(x: contentX, y: 218, width: contentWidth, height: 268))
         scroll.drawsBackground = false
@@ -588,6 +609,19 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         settings.setEnabled(sender.state == .on, for: sender.bundleIdentifier)
     }
 
+    /// Bulk toggles only touch apps that are actually installed, so the stored flags
+    /// stay meaningful if an app is later reinstalled.
+    private func setAllApps(enabled: Bool) {
+        for app in settings.managedApps(installed: hooks.installedApps()) {
+            settings.setEnabled(enabled, for: app.bundleIdentifier)
+        }
+        rebuildPage()
+    }
+
+    @objc private func selectAllApps() { setAllApps(enabled: true) }
+
+    @objc private func selectNoneApps() { setAllApps(enabled: false) }
+
     @objc private func toggleAppMinimized(_ sender: AppActionButton) {
         var config = settings.config(for: sender.bundleIdentifier)
         config.includeMinimized = sender.state == .on
@@ -761,6 +795,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         var pageSubviewCounts: [Int] = []
         var sliderCount = 0
         var switchCount = 0
+        var bulkSelectPresent = false
         for index in 0..<pageTitles.count {
             selectPage(index)
             let page = currentPageView
@@ -768,6 +803,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             let all = page.map { descendants(of: $0) } ?? []
             sliderCount = max(sliderCount, all.filter { $0 is NSSlider }.count)
             switchCount += all.filter { $0 is NSSwitch }.count
+            if index == 1 {
+                let titles = Set(all.compactMap { ($0 as? NSButton)?.title })
+                bulkSelectPresent = titles.contains("全选") && titles.contains("全不选")
+            }
         }
         selectPage(saved)
         let managed = settings.managedApps(installed: hooks.installedApps()).count
@@ -781,6 +820,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
                 "settingsSliderCount": sliderCount,
                 "settingsAppearanceSlidersComplete": sliderCount == 7,
                 "settingsSwitchCount": switchCount,
+                "settingsBulkSelectPresent": bulkSelectPresent,
                 "settingsSidebarComplete": sidebarItems.count == pageTitles.count,
                 "settingsWindowSize": "\(Int(windowSize.width))x\(Int(windowSize.height))"]
     }
