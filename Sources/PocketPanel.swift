@@ -117,6 +117,24 @@ final class PocketPanel: NSObject {
         window.orderFrontRegardless()
     }
 
+    /// Opens next to a point in screen coordinates, used when the pocket is summoned
+    /// by shaking a file mid-drag. The panel sits clear of the cursor so the drag can
+    /// still travel into it instead of dropping by accident.
+    func show(nearPoint point: CGPoint) {
+        let screen = NSScreen.screens.first { $0.frame.contains(point) }
+            ?? NSScreen.main ?? NSScreen.screens.first
+        guard let screen = screen else { window.orderFrontRegardless(); return }
+        let visible = screen.visibleFrame.insetBy(dx: 8, dy: 8)
+        var origin = CGPoint(x: point.x - panelSize.width / 2, y: point.y + 22)
+        if origin.y + panelSize.height > visible.maxY {
+            origin.y = point.y - panelSize.height - 22
+        }
+        origin.x = min(max(origin.x, visible.minX), max(visible.minX, visible.maxX - panelSize.width))
+        origin.y = min(max(origin.y, visible.minY), max(visible.minY, visible.maxY - panelSize.height))
+        window.setFrame(NSRect(origin: origin, size: panelSize), display: true)
+        window.orderFrontRegardless()
+    }
+
     func hide() { window.orderOut(nil) }
 
     func toggle(near anchor: NSRect? = nil) {

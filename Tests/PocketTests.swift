@@ -64,6 +64,49 @@ struct PocketTests {
         check("slow shake at uptime base does not trigger",
               !shake(&detector, points: [(100, uptimeBase), (120, uptimeBase + 0.3), (95, uptimeBase + 0.7), (120, uptimeBase + 1.1), (95, uptimeBase + 1.5)]))
 
+        // The pocket is meant to appear when a *dragged file* is shaken, not when the
+        // menu bar icon is. These exercise the gating rules without a timer.
+        let dragWatcher = DragShakeWatcher()
+        var dragShakes = 0
+        var dragPoint = CGPoint.zero
+        dragWatcher.onShake = { point in dragShakes += 1; dragPoint = point }
+        _ = dragWatcher.process(point: CGPoint(x: 100, y: 100), buttonDown: false, now: 0)
+        check("shake is ignored while no button is held", dragShakes == 0)
+        let dragBase: TimeInterval = 30
+        _ = dragWatcher.process(point: CGPoint(x: 100, y: 100), buttonDown: true, now: dragBase)
+        var dragTime = dragBase + 0.2
+        for x in [100.0, 120.0, 100.0, 120.0, 100.0] {
+            _ = dragWatcher.process(point: CGPoint(x: x, y: 100), buttonDown: true, now: dragTime)
+            dragTime += 0.05
+        }
+        check("shaking a dragged file opens the pocket once", dragShakes == 1)
+        check("pocket opens at the cursor", dragPoint == CGPoint(x: 100, y: 100))
+        _ = dragWatcher.process(point: CGPoint(x: 120, y: 100), buttonDown: false, now: dragTime)
+        _ = dragWatcher.process(point: CGPoint(x: 120, y: 100), buttonDown: true, now: dragTime + 0.2)
+        var second = dragTime + 0.25
+        for x in [140.0, 120.0, 140.0, 120.0, 140.0] {
+            _ = dragWatcher.process(point: CGPoint(x: x, y: 100), buttonDown: true, now: second)
+            second += 0.05
+        }
+        check("a second shake inside the retrigger window is ignored", dragShakes == 1)
+        var third = dragTime + 1.6
+        for x in [100.0, 120.0, 100.0, 120.0, 100.0] {
+            _ = dragWatcher.process(point: CGPoint(x: x, y: 100), buttonDown: true, now: third)
+            third += 0.05
+        }
+        check("a new shake after the retrigger window opens it again", dragShakes == 2)
+
+        let verticalWatcher = DragShakeWatcher()
+        var verticalShakes = 0
+        verticalWatcher.onShake = { _ in verticalShakes += 1 }
+        _ = verticalWatcher.process(point: CGPoint(x: 100, y: 100), buttonDown: true, now: 0)
+        var verticalTime = 0.2
+        for y in [100.0, 130.0, 100.0, 130.0, 100.0] {
+            _ = verticalWatcher.process(point: CGPoint(x: 100, y: y), buttonDown: true, now: verticalTime)
+            verticalTime += 0.05
+        }
+        check("vertical dragging does not open the pocket", verticalShakes == 0)
+
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("FinderHover-PocketTest-\(UUID().uuidString)")
         try! FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let source = root.appendingPathComponent("source.txt")

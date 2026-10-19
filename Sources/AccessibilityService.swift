@@ -274,6 +274,13 @@ final class AccessibilityService {
             "macOS": ProcessInfo.processInfo.operatingSystemVersionString,
             "bundleIdentifier": Bundle.main.bundleIdentifier ?? "unbundled",
             "appVersion": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
+            // Which copy is running, and whether other installs exist. Accessibility is
+            // granted per path, so these three fields explain most "I already granted it"
+            // reports before anything else is suspected.
+            "bundlePath": AppInstallation.path,
+            "executableName": AppInstallation.fileName,
+            "translocated": AppInstallation.isTranslocated,
+            "duplicateCopies": AppInstallation.duplicateCopies(),
             "accessibilityTrusted": trusted,
             "dockRunning": NSRunningApplication
                 .runningApplications(withBundleIdentifier: "com.apple.dock").first != nil,

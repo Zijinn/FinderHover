@@ -9,11 +9,30 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var pocketStatusView: PocketStatusView?
     private lazy var shortcutManager = ShortcutManager()
     private let settings = SettingsStore()
+    private lazy var dragShake = DragShakeWatcher()
+
+    private lazy var permissionWindow = PermissionWindowController(service: service)
+    private lazy var settingsWindow: SettingsWindowController = {
+        SettingsWindowController(
+            settings: settings, shortcuts: shortcutManager, pocketStore: pocketStore,
+            windowPanel: windowPanel,
+            hooks: SettingsHooks(
+                installedApps: { [weak self] in self?.installedApps() ?? [:] },
+                addCustomApp: { [weak self] in self?.addApp() },
+                openPocket: { [weak self] in self?.showPocket(nil) },
+                clearPocket: { [weak self] in self?.pocketStore.clear() },
+                showPanelPreview: { [weak self] in self?.showPreview(nil) },
+                refreshPanelPreview: { [weak self] in self?.refreshPreviewFromMenu() },
+                showPermissionWindow: { [weak self] in self?.showPermissionWindow(nil) },
+                isTrusted: { [weak self] in self?.service.trusted ?? false },
+                revealApp: {
+                    NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL])
+                },
+                resetPermission: { [weak self] in self?.resetAccessibilityPermission() }))
+    }()
 
     private var statusItem: NSStatusItem!
     private var menu: NSMenu!
-    private var metricLabels: [String: NSTextField] = [:]
-    private var metricSliderKeys: [MetricSliderKey] = []
     private var timer: Timer?
     private var clickMonitor: Any?
     private var gate = HoverGate()
@@ -31,6 +50,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private static let sampleTitles = ["paper", "paper14 基建与出口", "output", "_测试_1003 测度诊断",
                                        "1.正文", "Tobepolished", "FlowBridge", "选调生材料"]
+    private static let onboardingShownKey = "toolbox.permissionOnboardingShown"
 
     private func value(after option: String) -> String? {
         guard let i = arguments.firstIndex(of: option), i + 1 < arguments.count else { return nil }
@@ -69,6 +89,25 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
             updatePermission()
             writeReport(menuSmokeReport(), to: path)
             NSApp.terminate(nil)
+            return
+        }
+        if let path = value(after: "--render-settings") {
+            settingsWindow.show(page: 0)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                var report = self.settingsWindow.renderPages(basePath: path)
+                report["window"] = self.settingsWindow.renderWindow(to: path)
+                self.writeReport(report, to: path + ".json")
+                NSApp.terminate(nil)
+            }
+            return
+        }
+        if let path = value(after: "--render-permission") {
+            permissionWindow.show()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                self.writeReport(self.permissionWindow.renderPNG(to: URL(fileURLWithPath: path)),
+                                 to: path + ".json")
+                NSApp.terminate(nil)
+            }
             return
         }
         if let path = value(after: "--render-preview") {
@@ -125,6 +164,12 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
         configureMenu()
+        permissionWindow.onTrusted = { [weak self] in
+            self?.updatePermission()
+            self?.settingsWindow.reload()
+        }
+        dragShake.onShake = { [weak self] point in self?.handleDragShake(at: point) }
+        dragShake.start()
         updatePermission()
         timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in self?.tick() }
         RunLoop.main.add(timer!, forMode: .common)
@@ -142,13 +187,18 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else if arguments.contains("--preview") {
             showPreview(nil)
             manualDisplayUntil = now + 60
-        } else if !permissionGranted && !arguments.contains("--no-onboarding") {
+        } else if !permissionGranted && !arguments.contains("--no-onboarding")
+                    && !UserDefaults.standard.bool(forKey: Self.onboardingShownKey) {
+            // A menu bar utility that opens a window on every login is noise. Guide
+            // once; afterwards the menu item and the tool tip carry the reminder.
+            UserDefaults.standard.set(true, forKey: Self.onboardingShownKey)
             DispatchQueue.main.async { self.explainPermission() }
         }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         timer?.invalidate()
+        dragShake.stop()
         if let monitor = clickMonitor { NSEvent.removeMonitor(monitor) }
         windowPanel.hide()
         pocketPanel.hide()
@@ -163,7 +213,17 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
             updatePermission()
             lastPermissionQuery = time
         }
+        // The settings window owns the foreground while open. The permission guide is
+        // small, so it only blocks hover while the pointer is actually over it —
+        // otherwise leaving it open would silently kill Dock detection.
         let mouse = NSEvent.mouseLocation
+        let overGuide = permissionWindow.isVisible && permissionWindow.frame.contains(mouse)
+        if settingsWindow.isVisible || overGuide {
+            if windowPanel.isVisible { windowPanel.hide() }
+            lastHit = nil
+            gate.reset()
+            return
+        }
         let inPanel = windowPanel.isVisible &&
             windowPanel.frame.insetBy(dx: -12, dy: -12).contains(mouse)
         if time < manualDisplayUntil { return }
@@ -221,12 +281,20 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let previouslyTrusted = permissionGranted
         permissionGranted = service.trusted
         statusItem?.button?.toolTip = permissionGranted
-            ? "Mac工具箱：移到 Dock 应用图标上看看；晃动图标打开临时口袋"
-            : "Mac工具箱：窗口切换需要辅助功能权限；快捷键可随时打开口袋"
+            ? "MacToolbox：移到 Dock 应用图标上看看；拖动文件时晃动鼠标可打开临时口袋"
+            : "MacToolbox：窗口切换需要辅助功能权限；拖动文件时晃动鼠标可打开临时口袋"
         if !permissionGranted && previouslyTrusted {
             windowPanel.hide()
             gate.reset()
             lastHit = nil
+        }
+        if previouslyTrusted != permissionGranted {
+            settingsWindow.reload()
+            // A rebuild invalidates the ad-hoc signature and drops the grant, so the
+            // guide must be able to come back after a successful authorisation.
+            if !previouslyTrusted {
+                UserDefaults.standard.set(false, forKey: Self.onboardingShownKey)
+            }
         }
         dockEdge = DockEdge(rawValue:
             CFPreferencesCopyAppValue("orientation" as CFString, "com.apple.dock" as CFString) as? String
@@ -292,7 +360,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func configureMenu() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         guard let button = statusItem.button else { return }
-        let icon = NSImage(systemSymbolName: "rectangle.stack", accessibilityDescription: "Mac工具箱")
+        let icon = NSImage(systemSymbolName: "rectangle.stack", accessibilityDescription: "MacToolbox")
         icon?.isTemplate = true
         button.image = nil
         let statusView = PocketStatusView(image: icon, statusButton: button)
@@ -309,7 +377,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.pocketStatusView?.setCount(count)
         }
         statusView.setCount(pocketStore.count)
-        button.toolTip = "Mac工具箱；晃动图标打开临时口袋"
+        button.toolTip = "MacToolbox；拖动文件时晃动鼠标打开临时口袋"
 
         menu = NSMenu()
         menu.autoenablesItems = false
@@ -322,16 +390,43 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         rebuildMenu()
     }
 
+    /// The menu is now a launcher, not a control panel: switches and entry points
+    /// only. Everything with a slider or a per-app row lives in the settings window.
     private func rebuildMenu() {
-        metricLabels.removeAll()
-        metricSliderKeys.removeAll()
         while menu.items.count > 0 { menu.removeItem(at: 0) }
-        addHeading("Mac工具箱")
-        addSwitcherSection()
+        addHeading("MacToolbox")
+        add("打开设置…", #selector(openSettings(_:)), key: ",")
         menu.addItem(.separator())
-        addPocketSection()
+
+        let switcher = NSMenuItem(title: "启用悬停切窗", action: #selector(toggleSwitcher(_:)),
+                                  keyEquivalent: "")
+        switcher.target = self
+        switcher.state = settings.isToolEnabled(.windowSwitcher) ? .on : .off
+        menu.addItem(switcher)
+
+        let pocket = NSMenuItem(title: "启用临时口袋", action: #selector(togglePocket(_:)),
+                                keyEquivalent: "")
+        pocket.target = self
+        pocket.state = settings.isToolEnabled(.pocket) ? .on : .off
+        menu.addItem(pocket)
+
         menu.addItem(.separator())
-        addSystemSection()
+        add("显示当前应用窗口", #selector(showCurrentAppWindows(_:)))
+        add("打开临时口袋", #selector(showPocket(_:)))
+        menu.addItem(.separator())
+
+        let permission = NSMenuItem(title: permissionGranted ? "辅助功能：已授权" : "辅助功能：尚未授权",
+                                    action: nil, keyEquivalent: "")
+        permission.isEnabled = false
+        menu.addItem(permission)
+        add("开启辅助功能权限…", #selector(showPermissionWindow(_:)))
+        add("生成诊断报告…", #selector(saveDiagnostic(_:)))
+
+        let last = NSMenuItem(title: lastAction, action: nil, keyEquivalent: "")
+        last.isEnabled = false
+        menu.addItem(last)
+        menu.addItem(.separator())
+        add("退出 MacToolbox", #selector(quit(_:)))
     }
 
     private func addHeading(_ title: String) {
@@ -340,19 +435,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(item)
     }
 
-    private func addSection(_ title: String, isEnabled: Bool) {
-        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        item.isEnabled = false
-        item.attributedTitle = NSAttributedString(string: title, attributes: [
-            .font: NSFont.systemFont(ofSize: 11, weight: .semibold),
-            .foregroundColor: isEnabled ? NSColor.controlAccentColor : NSColor.secondaryLabelColor
-        ])
-        menu.addItem(item)
-    }
-
-    /// Walks the whole menu graph without clicking anything. This is the only way
-    /// the per-app submenus, slider rows and lazy pocket panel get exercised while
-    /// Accessibility is still ungranted.
+    /// Walks the whole menu graph without clicking anything, then builds every
+    /// settings page offscreen. This is the only way the window surface gets
+    /// exercised while Accessibility is still ungranted.
     private func menuSmokeReport() -> [String: Any] {
         guard let menu = menu else {
             return ["menuBuilt": false, "statusItemCreated": statusItem != nil]
@@ -386,32 +471,17 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
         walk(menu)
-        let managed = settings.managedApps(installed: installedApps())
-        func submenu(named title: String) -> NSMenu? {
-            menu.items.first { $0.title == title }?.submenu
-        }
-        let picker = submenu(named: "启用哪些应用…")
-        let appearance = submenu(named: "面板外观…")
-        let appRows = picker?.items.filter { $0.submenu != nil }.count ?? -1
-        let sliderRows = appearance?.items.filter { $0.view != nil }.count ?? -1
-        let perAppRows = picker?.items.first?.submenu?.items.count ?? -1
         let titles = menu.items.map(\.title).filter { !$0.isEmpty }
-        return ["menuBuilt": true,
+        var report: [String: Any] = ["menuBuilt": true,
                 "statusItemCreated": statusItem != nil,
                 "statusItemHasMenu": statusItem?.menu === menu,
                 "menuDelegateIsController": menu.delegate === self,
                 "topLevelItemCount": menu.items.count,
-                "sectionHeadingsPresent": titles.contains("Mac工具箱")
+                "sectionHeadingsPresent": titles.contains("MacToolbox")
                     && titles.contains("启用悬停切窗")
                     && titles.contains("启用临时口袋")
-                    && titles.contains("退出 Mac工具箱"),
-                "managedAppCount": managed.count,
-                "appPickerRows": appRows,
-                "appPickerRowsMatchManagedApps": appRows == managed.count,
-                "perAppSubmenuRows": perAppRows,
-                "perAppSubmenuBuilt": perAppRows >= 4,
-                "appearanceSliderRows": sliderRows,
-                "appearanceRowsComplete": sliderRows == 7,
+                    && titles.contains("退出 MacToolbox"),
+                "settingsEntryPresent": titles.contains("打开设置…"),
                 "actionableItemCount": actionable,
                 "actionItemsMissingTarget": missingTarget,
                 "unresolvedSelectors": unresolvedSelector,
@@ -421,221 +491,14 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 "pocketPanelVisible": pocketPanel.isVisible,
                 "pocketItemCount": pocketStore.count,
                 "permissionNoteMatchesState":
-                    titles.contains("需要辅助功能权限") == !permissionGranted,
-                "switcherShortcutRowPresent": titles.contains { $0.hasPrefix("快捷键：") },
+                    titles.contains("辅助功能：尚未授权") == !permissionGranted,
                 "accessibilityTrusted": permissionGranted]
+        for (key, value) in settingsWindow.smokeReport() { report[key] = value }
+        return report
     }
 
-    private func addSwitcherSection() {
-        let enabled = settings.isToolEnabled(.windowSwitcher)
-        addSection("窗口切换（悬停 Dock 图标）", isEnabled: enabled)
-        let toggle = NSMenuItem(title: "启用悬停切窗", action: #selector(toggleSwitcher), keyEquivalent: "")
-        toggle.target = self
-        toggle.state = enabled ? .on : .off
-        menu.addItem(toggle)
-        menu.addItem(appPickerItem())
-        menu.addItem(appAppearanceItem())
-        let showCurrent = NSMenuItem(title: "显示当前应用窗口", action: #selector(showCurrentAppWindows),
-                                     keyEquivalent: "")
-        showCurrent.target = self
-        showCurrent.isEnabled = enabled && permissionGranted
-        menu.addItem(showCurrent)
-        let preview = NSMenuItem(title: "界面预览（示例数据）", action: #selector(showPreview), keyEquivalent: "")
-        preview.target = self
-        menu.addItem(preview)
-        let shortcut = NSMenuItem(title: "快捷键：\(shortcutTitle(.windowSwitcherPanel))",
-                                  action: #selector(configureSwitcherShortcut), keyEquivalent: "")
-        shortcut.target = self
-        menu.addItem(shortcut)
-        let reset = NSMenuItem(title: "清除面板快捷键", action: #selector(resetSwitcherShortcut), keyEquivalent: "")
-        reset.target = self
-        reset.isEnabled = shortcutManager.shortcut(for: .windowSwitcherPanel) != nil
-        menu.addItem(reset)
-        if !permissionGranted {
-            let note = NSMenuItem(title: "需要辅助功能权限", action: nil, keyEquivalent: "")
-            note.isEnabled = false
-            menu.addItem(note)
-        }
-    }
-
-    private func appPickerItem() -> NSMenuItem {
-        let item = NSMenuItem(title: "启用哪些应用…", action: nil, keyEquivalent: "")
-        let submenu = NSMenu()
-        submenu.autoenablesItems = false
-        let installed = installedApps()
-        let apps = settings.managedApps(installed: installed)
-        for app in apps {
-            let entry = NSMenuItem(title: app.displayName, action: nil, keyEquivalent: "")
-            entry.state = app.isEnabled ? .on : .off
-            entry.submenu = appConfigSubmenu(for: app)
-            submenu.addItem(entry)
-        }
-        if apps.isEmpty {
-            let none = NSMenuItem(title: "没有找到可管理的应用", action: nil, keyEquivalent: "")
-            none.isEnabled = false
-            submenu.addItem(none)
-        }
-        submenu.addItem(.separator())
-        let add = NSMenuItem(title: "添加其他应用…", action: #selector(addApp), keyEquivalent: "")
-        add.target = self
-        submenu.addItem(add)
-        item.submenu = submenu
-        return item
-    }
-
-    private func appConfigSubmenu(for app: ManagedApp) -> NSMenu {
-        let submenu = NSMenu()
-        submenu.autoenablesItems = false
-        let enable = NSMenuItem(title: "悬停切换此应用", action: #selector(toggleAppEnabled), keyEquivalent: "")
-        enable.target = self
-        enable.state = app.isEnabled ? .on : .off
-        enable.representedObject = app.bundleIdentifier
-        submenu.addItem(enable)
-        submenu.addItem(.separator())
-        let minimized = NSMenuItem(title: "列出最小化窗口", action: #selector(toggleAppMinimized), keyEquivalent: "")
-        minimized.target = self
-        minimized.state = app.config.includeMinimized ? .on : .off
-        minimized.representedObject = app.bundleIdentifier
-        submenu.addItem(minimized)
-        let limit = NSMenuItem(title: "最多列出窗口：\(app.config.maxWindows)", action: nil, keyEquivalent: "")
-        limit.isEnabled = false
-        submenu.addItem(limit)
-        for count in [3, 6, 9, 12, 20, 40] {
-            let choice = NSMenuItem(title: "\(count) 个", action: #selector(setAppMaxWindows), keyEquivalent: "")
-            choice.target = self
-            choice.state = app.config.maxWindows == count ? .on : .off
-            choice.representedObject = "\(app.bundleIdentifier)|\(count)"
-            submenu.addItem(choice)
-        }
-        if settings.customBundleIdentifiers().contains(app.bundleIdentifier) {
-            submenu.addItem(.separator())
-            let remove = NSMenuItem(title: "从列表移除", action: #selector(removeApp), keyEquivalent: "")
-            remove.target = self
-            remove.representedObject = app.bundleIdentifier
-            submenu.addItem(remove)
-        }
-        return submenu
-    }
-
-    private func appAppearanceItem() -> NSMenuItem {
-        let item = NSMenuItem(title: "面板外观…", action: nil, keyEquivalent: "")
-        let submenu = NSMenu()
-        submenu.autoenablesItems = false
-        let metrics = settings.metrics
-        submenu.addItem(metricSlider(title: "行高", key: "rowHeight", value: metrics.rowHeight,
-                                     range: 34...72, unit: "pt"))
-        submenu.addItem(metricSlider(title: "标题字号", key: "titleFontSize", value: metrics.titleFontSize,
-                                     range: 11...22, unit: "pt"))
-        submenu.addItem(metricSlider(title: "宽度上限", key: "widthCap", value: metrics.widthCap,
-                                     range: 240...640, unit: "pt"))
-        submenu.addItem(metricSlider(title: "最大高度占比", key: "maxHeightFraction",
-                                     value: metrics.maxHeightFraction * 100, range: 30...90, unit: "%"))
-        submenu.addItem(metricSlider(title: "距 Dock 间隙", key: "dockGap", value: metrics.dockGap,
-                                     range: 4...40, unit: "pt"))
-        submenu.addItem(metricSlider(title: "圆角", key: "cornerRadius", value: metrics.cornerRadius,
-                                     range: 0...36, unit: "pt"))
-        submenu.addItem(metricSlider(title: "玻璃透明度", key: "glassTransparency",
-                                     value: windowPanel.configuredGlassTransparency, range: 0...100, unit: "%"))
-        let autoFit = NSMenuItem(title: "宽度自适应标题", action: #selector(toggleAutoFitWidth), keyEquivalent: "")
-        autoFit.target = self
-        autoFit.state = metrics.autoFitWidth ? .on : .off
-        submenu.addItem(autoFit)
-        let reset = NSMenuItem(title: "恢复默认外观", action: #selector(resetMetrics), keyEquivalent: "")
-        reset.target = self
-        submenu.addItem(reset)
-        item.submenu = submenu
-        return item
-    }
-
-    private func metricSlider(title: String, key: String, value: CGFloat,
-                              range: ClosedRange<CGFloat>, unit: String) -> NSMenuItem {
-        let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-        let view = NSView(frame: NSRect(x: 0, y: 0, width: 260, height: 54))
-        let caption = NSTextField(labelWithString: title)
-        caption.font = .systemFont(ofSize: 12)
-        caption.frame = NSRect(x: 18, y: 30, width: 130, height: 17)
-        let label = NSTextField(labelWithString: formatMetric(key, value, unit: unit))
-        label.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-        label.alignment = .right
-        label.frame = NSRect(x: 182, y: 30, width: 60, height: 17)
-        metricLabels[key] = label
-        let slider = NSSlider(value: Double(value), minValue: Double(range.lowerBound),
-                              maxValue: Double(range.upperBound), target: self,
-                              action: #selector(metricChanged))
-        slider.isContinuous = true
-        slider.frame = NSRect(x: 18, y: 6, width: 224, height: 22)
-        metricSliderKeys.append(MetricSliderKey(key: key, unit: unit))
-        slider.tag = metricSliderKeys.count - 1
-        slider.setAccessibilityLabel(title)
-        view.addSubview(caption)
-        view.addSubview(label)
-        view.addSubview(slider)
-        item.view = view
-        return item
-    }
-
-    private struct MetricSliderKey {
-        let key: String
-        let unit: String
-    }
-
-    private func formatMetric(_ key: String, _ value: CGFloat, unit: String) -> String {
-        if key == "titleFontSize" || key == "rowHeight" || key == "widthCap" || key == "dockGap" {
-            return String(format: "%.0f%@", Double(value), unit)
-        }
-        return String(format: "%.0f%%", Double(value))
-    }
-
-    private func shortcutTitle(_ role: ShortcutRole) -> String {
-        shortcutManager.shortcut(for: role)?.displayName ?? "未设置"
-    }
-
-    private func addPocketSection() {
-        let enabled = settings.isToolEnabled(.pocket)
-        addSection("临时口袋", isEnabled: enabled)
-        let toggle = NSMenuItem(title: "启用临时口袋", action: #selector(togglePocket), keyEquivalent: "")
-        toggle.target = self
-        toggle.state = enabled ? .on : .off
-        menu.addItem(toggle)
-        let status = NSMenuItem(title: "口袋：\(pocketStore.count) 项", action: nil, keyEquivalent: "")
-        status.isEnabled = false
-        menu.addItem(status)
-        let open = NSMenuItem(title: "打开临时口袋", action: #selector(showPocket), keyEquivalent: "")
-        open.target = self
-        open.isEnabled = enabled
-        menu.addItem(open)
-        let clear = NSMenuItem(title: "清空临时口袋", action: #selector(clearPocket), keyEquivalent: "")
-        clear.target = self
-        clear.isEnabled = enabled && pocketStore.count > 0
-        menu.addItem(clear)
-        let shortcut = NSMenuItem(title: "快捷键：\(shortcutTitle(.pocket))",
-                                  action: #selector(configurePocketShortcut), keyEquivalent: "")
-        shortcut.target = self
-        menu.addItem(shortcut)
-        let reset = NSMenuItem(title: "恢复默认快捷键（⌥Space）", action: #selector(resetPocketShortcut),
-                               keyEquivalent: "")
-        reset.target = self
-        menu.addItem(reset)
-    }
-
-    private func addSystemSection() {
-        addSection("系统", isEnabled: true)
-        let permission = NSMenuItem(title: permissionGranted ? "辅助功能：已授权" : "辅助功能：尚未授权",
-                                    action: nil, keyEquivalent: "")
-        permission.isEnabled = false
-        menu.addItem(permission)
-        add("开启辅助功能权限…", #selector(openPermissionSettings))
-        add("重新检测权限", #selector(recheckPermission))
-        add("生成诊断报告…", #selector(saveDiagnostic))
-        let last = NSMenuItem(title: lastAction, action: nil, keyEquivalent: "")
-        last.isEnabled = false
-        menu.addItem(last)
-        menu.addItem(.separator())
-        add("退出 Mac工具箱", #selector(quit))
-    }
-
-    private func add(_ title: String, _ selector: Selector) {
-        let item = NSMenuItem(title: title, action: selector, keyEquivalent: "")
+    private func add(_ title: String, _ selector: Selector, key: String = "") {
+        let item = NSMenuItem(title: title, action: selector, keyEquivalent: key)
         item.target = self
         menu.addItem(item)
     }
@@ -648,35 +511,14 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
             windowPanel.hide()
             gate.suppressUntilExit()
         }
+        settingsWindow.reload()
     }
 
     @objc private func togglePocket(_ sender: NSMenuItem) {
         let enable = sender.state != .on
         settings.setToolEnabled(enable, for: .pocket)
         if !enable { pocketPanel.hide() }
-    }
-
-    @objc private func toggleAppEnabled(_ sender: NSMenuItem) {
-        guard let identifier = sender.representedObject as? String else { return }
-        settings.setEnabled(sender.state != .on, for: identifier)
-        lastHit = nil
-        gate.reset()
-    }
-
-    @objc private func toggleAppMinimized(_ sender: NSMenuItem) {
-        guard let identifier = sender.representedObject as? String else { return }
-        var config = settings.config(for: identifier)
-        config.includeMinimized = !config.includeMinimized
-        settings.setConfig(config, for: identifier)
-    }
-
-    @objc private func setAppMaxWindows(_ sender: NSMenuItem) {
-        guard let payload = sender.representedObject as? String else { return }
-        let parts = payload.split(separator: "|")
-        guard parts.count == 2, let identifier = parts.first, let count = Int(parts[1]) else { return }
-        var config = settings.config(for: String(identifier))
-        config.maxWindows = count
-        settings.setConfig(config, for: String(identifier))
+        settingsWindow.reload()
     }
 
     @objc private func addApp() {
@@ -694,69 +536,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         settings.setEnabled(true, for: identifier)
     }
 
-    @objc private func removeApp(_ sender: NSMenuItem) {
-        guard let identifier = sender.representedObject as? String else { return }
-        settings.removeCustomApp(bundleIdentifier: identifier)
-        lastHit = nil
-        gate.reset()
-    }
-
-    @objc private func toggleAutoFitWidth(_ sender: NSMenuItem) {
-        var metrics = settings.metrics
-        metrics.autoFitWidth = sender.state != .on
-        settings.setMetrics(metrics)
-        refreshPreviewFromMenu()
-    }
-
-    @objc private func resetMetrics(_ sender: Any?) {
-        settings.setMetrics(PanelMetrics.defaultValue)
-        refreshPreviewFromMenu()
-    }
-
-    @objc private func metricChanged(_ sender: NSSlider) {
-        guard sender.tag >= 0, sender.tag < metricSliderKeys.count else { return }
-        let payload = metricSliderKeys[sender.tag]
-        let value = CGFloat(sender.doubleValue)
-        metricLabels[payload.key]?.stringValue = formatMetric(payload.key, value, unit: payload.unit)
-        if payload.key == "glassTransparency" {
-            windowPanel.setGlassTransparency(value)
-        } else {
-            var metrics = settings.metrics
-            switch payload.key {
-            case "rowHeight": metrics.rowHeight = value
-            case "titleFontSize": metrics.titleFontSize = value
-            case "widthCap": metrics.widthCap = value
-            case "maxHeightFraction": metrics.maxHeightFraction = value / 100
-            case "dockGap": metrics.dockGap = value
-            case "cornerRadius": metrics.cornerRadius = value
-            default: return
-            }
-            settings.setMetrics(metrics)
-        }
-        refreshPreviewFromMenu()
-    }
-
     private func refreshPreviewFromMenu() {
         if !windowPanel.isVisible { showPreview(nil) }
         manualDisplayUntil = now + 20
-    }
-
-    @objc private func configurePocketShortcut(_ sender: Any?) {
-        NSApp.activate(ignoringOtherApps: true)
-        shortcutManager.presentRecorder(for: .pocket)
-    }
-
-    @objc private func resetPocketShortcut(_ sender: Any?) {
-        shortcutManager.reset(.pocket)
-    }
-
-    @objc private func configureSwitcherShortcut(_ sender: Any?) {
-        NSApp.activate(ignoringOtherApps: true)
-        shortcutManager.presentRecorder(for: .windowSwitcherPanel)
-    }
-
-    @objc private func resetSwitcherShortcut(_ sender: Any?) {
-        shortcutManager.reset(.windowSwitcherPanel)
     }
 
     // MARK: - Panel entries
@@ -806,45 +588,60 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         pocketPanel.show(near: pocketStatusView?.statusFrameInScreen())
     }
 
+    /// Shaking a file while dragging it summons the pocket at the cursor. The drag
+    /// pasteboard is the filter: without a file or image payload this is just a
+    /// text selection or a window resize, and nothing should appear.
+    private func handleDragShake(at point: CGPoint) {
+        guard settings.isToolEnabled(.pocket) else { return }
+        let pasteboard = NSPasteboard(name: .drag)
+        guard pocketStore.hasAcceptablePasteboardContent(pasteboard) else {
+            // Surfaces in the menu status row, which is the only place a menu bar
+            // utility can explain a gesture that did nothing.
+            lastAction = "晃动了，但当前拖拽内容不是文件或图片"
+            return
+        }
+        lastAction = "口袋已打开，把文件移进去即可收纳"
+        windowPanel.hide()
+        pocketPanel.show(nearPoint: point)
+    }
+
     @objc private func clearPocket(_ sender: Any?) {
         pocketStore.clear()
     }
 
     // MARK: - Permissions and diagnostics
 
+    /// The old flow dumped a paragraph of instructions into an NSAlert. A dedicated
+    /// window can poll the real state and react the moment the switch flips.
     private func explainPermission() {
-        NSApp.activate(ignoringOtherApps: true)
-        let appPath = Bundle.main.bundleURL.path
-        let bundleID = Bundle.main.bundleIdentifier ?? "unknown"
-        let alert = NSAlert()
-        alert.messageText = "需要开启辅助功能权限"
-        alert.informativeText = "请在“系统设置 → 隐私与安全性 → 辅助功能”中添加并开启当前这个应用：\n\nMac工具箱\n\(appPath)\n\nBundle ID：\(bundleID)\n\n授权后点击菜单栏中的“重新检测权限”，或重新打开应用。内部程序名可能显示为 FinderHover。未授权时窗口切换不可用，临时口袋和快捷键仍可正常使用。"
-        alert.addButton(withTitle: "打开辅助功能设置")
-        alert.addButton(withTitle: "复制当前路径")
-        alert.addButton(withTitle: "稍后")
-        switch alert.runModal() {
-        case .alertFirstButtonReturn: openPermissionSettings(nil)
-        case .alertSecondButtonReturn:
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(appPath, forType: .string)
-        default: break
-        }
+        showPermissionWindow(nil)
     }
 
-    @objc private func openPermissionSettings(_ sender: Any?) {
-        service.requestPermission()
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-            NSWorkspace.shared.open(url)
-        }
+    @objc private func showPermissionWindow(_ sender: Any?) {
+        permissionWindow.show()
     }
 
-    @objc private func recheckPermission(_ sender: Any?) { updatePermission() }
+    @objc private func openSettings(_ sender: Any?) {
+        settingsWindow.show(page: 0)
+    }
+
+    @objc private func resetAccessibilityPermission() {
+        let identifier = Bundle.main.bundleIdentifier ?? "com.zijin.FinderHoverPrototype"
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+        process.arguments = ["reset", "Accessibility", identifier]
+        try? process.run()
+        process.waitUntilExit()
+        lastHit = nil
+        gate.reset()
+        updatePermission()
+    }
 
     @objc private func saveDiagnostic(_ sender: Any?) {
         NSApp.activate(ignoringOtherApps: true)
         let picker = NSSavePanel()
-        picker.nameFieldStringValue = "Mac工具箱-诊断.json"
-        picker.title = "保存 Mac工具箱诊断报告"
+        picker.nameFieldStringValue = "MacToolbox-诊断.json"
+        picker.title = "保存 MacToolbox 诊断报告"
         if picker.runModal() == .OK, let url = picker.url {
             writeReport(service.diagnostic(settings: settings,
                                            managedApps: settings.managedApps(installed: installedApps())),

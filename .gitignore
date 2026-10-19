@@ -16,3 +16,14 @@ DerivedData/
 .vscode/
 .idea/
 *.swp
+
+# Code signing material — the private key must never be committed
+*.p12
+*.pfx
+*.pem
+*.key
+*.cer
+
+# Local agent / planning state (contains absolute paths from this machine)
+.workbuddy-ai/
+.pi/

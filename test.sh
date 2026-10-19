@@ -7,7 +7,8 @@ xcrun swiftc -swift-version 5 "$ROOT/Sources/Geometry.swift" "$ROOT/Tests/main.s
     -framework Foundation -framework CoreGraphics -o "$ROOT/build/GeometryTests"
 "$ROOT/build/GeometryTests" | tee "$ROOT/TestResults/logic-tests.txt"
 POCKET_TEST="$ROOT/build/PocketTests"
-xcrun swiftc -swift-version 5 "$ROOT/Sources/ShakeDetector.swift" "$ROOT/Sources/PocketStore.swift" "$ROOT/Tests/PocketTests.swift" \
+xcrun swiftc -swift-version 5 "$ROOT/Sources/ShakeDetector.swift" "$ROOT/Sources/DragShakeWatcher.swift" \
+    "$ROOT/Sources/PocketStore.swift" "$ROOT/Tests/PocketTests.swift" \
     -framework AppKit -framework CoreGraphics -o "$POCKET_TEST"
 "$POCKET_TEST" | tee "$ROOT/TestResults/pocket-tests.txt"
 SHORTCUT_TEST="$ROOT/build/ShortcutTests"
@@ -20,16 +21,26 @@ xcrun swiftc -swift-version 5 "$ROOT/Sources/AppModel.swift" "$ROOT/Sources/Sett
     -framework Foundation -framework CoreGraphics -framework ApplicationServices -o "$MODEL_TEST"
 "$MODEL_TEST" | tee "$ROOT/TestResults/model-tests.txt"
 "$ROOT/build.sh"
+APP="$ROOT/build/FinderHover.app/Contents/MacOS/FinderHover"
+# Launch the binary directly instead of `open --args`: LaunchServices does not
+# reliably forward arguments here, which made the app fall back to its first-run
+# branch and wait instead of exiting. Every mode below terminates on its own.
 for theme in light dark; do
     rm -f "$ROOT/TestResults/preview-$theme.png" "$ROOT/TestResults/preview-$theme.png.json"
-    open -n -W "$ROOT/build/FinderHover.app" --args --render-preview "$ROOT/TestResults/preview-$theme.png" --appearance "$theme"
+    "$APP" --render-preview "$ROOT/TestResults/preview-$theme.png" --appearance "$theme"
 done
 rm -f "$ROOT/TestResults/diagnostics.json"
-open -n -W "$ROOT/build/FinderHover.app" --args --diagnose "$ROOT/TestResults/diagnostics.json"
+"$APP" --diagnose "$ROOT/TestResults/diagnostics.json"
 rm -f "$ROOT/TestResults/menu.json"
-open -n -W "$ROOT/build/FinderHover.app" --args --menu-test "$ROOT/TestResults/menu.json"
+"$APP" --menu-test "$ROOT/TestResults/menu.json"
 rm -f "$ROOT/TestResults/animation.json"
-open -n -W "$ROOT/build/FinderHover.app" --args --animation-test "$ROOT/TestResults/animation.json"
+"$APP" --animation-test "$ROOT/TestResults/animation.json"
+for asset in settings permission; do
+    rm -f "$ROOT/TestResults/$asset.png" "$ROOT/TestResults/$asset.png.json"
+done
+rm -f "$ROOT/TestResults"/settings-p*.png "$ROOT/TestResults/settings-window.png"
+"$APP" --render-settings "$ROOT/TestResults/settings.png"
+"$APP" --render-permission "$ROOT/TestResults/permission.png"
 python3 - "$ROOT" <<'PY'
 import json, struct, sys
 from pathlib import Path
@@ -98,12 +109,19 @@ for theme in ('light', 'dark'):
 print('NOTE: PNGs verify foreground layout, not desktop glass refraction. Inspect the live preview for glass.')
 diagnostic = json.loads((root / 'diagnostics.json').read_text())
 for key in ('accessibilityTrusted', 'dockRunning', 'windowSwitcherEnabled', 'pocketEnabled',
-            'dockAppItemCount', 'dockApps', 'managedAppCount', 'enabledAppCount', 'enabledApps'):
+            'dockAppItemCount', 'dockApps', 'managedAppCount', 'enabledAppCount', 'enabledApps',
+            'bundlePath', 'executableName', 'translocated', 'duplicateCopies'):
     assert key in diagnostic, sorted(diagnostic)
 assert diagnostic['dockRunning'] is True, diagnostic
 assert isinstance(diagnostic['dockApps'], list), diagnostic
+assert isinstance(diagnostic['duplicateCopies'], list), diagnostic
+assert diagnostic['bundlePath'].endswith(diagnostic['executableName']), diagnostic
 assert diagnostic['managedAppCount'] >= len(diagnostic['enabledApps']), diagnostic
 print('Accessibility trusted:', diagnostic['accessibilityTrusted'])
+print('Running from:', diagnostic['bundlePath'])
+if diagnostic['duplicateCopies']:
+    print('WARNING: other copies of the same bundle exist; the grant is per path:',
+          diagnostic['duplicateCopies'])
 print('Dock app items visible to this process:', diagnostic['dockAppItemCount'])
 print('Managed apps:', diagnostic['managedAppCount'], 'enabled:', diagnostic['enabledAppCount'])
 for app in diagnostic['enabledApps']:
@@ -116,22 +134,44 @@ if not diagnostic['accessibilityTrusted']:
     print('BLOCKED: real hover/focus requires manual Accessibility permission.')
 menu_report = json.loads((root / 'menu.json').read_text())
 for key in ('menuBuilt', 'statusItemHasMenu', 'menuDelegateIsController', 'sectionHeadingsPresent',
-            'appPickerRowsMatchManagedApps', 'perAppSubmenuBuilt', 'appearanceRowsComplete',
-            'permissionNoteMatchesState', 'switcherShortcutRowPresent', 'pocketPanelConstructed'):
+            'settingsEntryPresent', 'settingsWindowConstructed', 'settingsSidebarComplete',
+            'settingsAppRowsMatchManagedApps', 'settingsAppearanceSlidersComplete',
+            'permissionNoteMatchesState', 'pocketPanelConstructed'):
     assert menu_report.get(key) is True, (key, menu_report)
 assert menu_report['actionItemsMissingTarget'] == 0, menu_report
 assert menu_report['unresolvedSelectors'] == 0, menu_report
 assert menu_report['emptySubmenuCount'] == 0, menu_report
-assert menu_report['managedAppCount'] > 0, menu_report
-assert menu_report['appearanceSliderRows'] == 7, menu_report
-assert menu_report['topLevelItemCount'] >= 18, menu_report
-print(f"PASS: toolbox menu graph builds ({menu_report['topLevelItemCount']} top rows, "
-      f"{menu_report['managedAppCount']} managed apps, {menu_report['appPickerRows']} app rows, "
-      f"7 appearance sliders, {menu_report['actionableItemCount']} actions, 0 unresolved selectors)")
+assert menu_report['settingsPageCount'] == 4, menu_report
+assert menu_report['settingsManagedAppCount'] > 0, menu_report
+assert menu_report['settingsSliderCount'] == 7, menu_report
+assert menu_report['settingsSwitchCount'] >= 3, menu_report
+assert menu_report['topLevelItemCount'] >= 9, menu_report
+print(f"PASS: launcher menu builds ({menu_report['topLevelItemCount']} top rows, "
+      f"{menu_report['actionableItemCount']} actions, 0 unresolved selectors)")
+print(f"PASS: settings window builds ({menu_report['settingsPageCount']} pages, "
+      f"{menu_report['settingsSidebarItemCount']} sidebar items, "
+      f"{menu_report['settingsAppRowCount']} app rows, {menu_report['settingsSliderCount']} sliders, "
+      f"{menu_report['settingsSwitchCount']} switches, {menu_report['settingsWindowSize']} pt)")
+settings_report = json.loads((root / 'settings.png.json').read_text())
+assert settings_report['pageCount'] == 4, settings_report
+assert len(settings_report['pages']) == 4, settings_report
+for page in settings_report['pages']:
+    assert page['width'] == 576 and page['height'] == 560, page
+    assert page['pngBytes'] > 5000, page
+assert settings_report['window']['pngBytes'] > 5000, settings_report['window']
+print('PASS: settings pages render (' + ', '.join(
+    f"p{p['page']} {p['title']} {p['pixelsWide']}x{p['pixelsHigh']}" for p in settings_report['pages']) + ')')
+permission_report = json.loads((root / 'permission.png.json').read_text())
+assert permission_report['width'] == 560 and permission_report['height'] == 462, permission_report
+assert permission_report['pngBytes'] > 5000, permission_report
+assert permission_report['pixelsWide'] == 1120 and permission_report['pixelsHigh'] == 924, permission_report
+print(f"PASS: permission guide renders ({permission_report['pixelsWide']}x"
+      f"{permission_report['pixelsHigh']}, translocated={permission_report['translocated']}, "
+      f"trusted={permission_report['trusted']})")
 PY
 if [ "${1:-}" = '--integration' ]; then
     rm -f "$ROOT/TestResults/integration.json"
-    open -n -W "$ROOT/build/FinderHover.app" --args --integration-test "$ROOT/TestResults/integration.json"
+    "$APP" --integration-test "$ROOT/TestResults/integration.json"
     python3 - "$ROOT/TestResults/integration.json" <<'PY'
 import json, sys
 result = json.load(open(sys.argv[1]))

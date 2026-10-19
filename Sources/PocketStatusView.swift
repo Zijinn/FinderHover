@@ -37,7 +37,7 @@ final class PocketStatusView: NSView {
             let point = NSEvent.mouseLocation
             DispatchQueue.main.async { self?.observe(point: point) }
         }
-        toolTip = "在图标附近快速左右晃动两次打开口袋；也可拖入文件"
+        toolTip = "把文件拖到这里即可收纳；在图标附近快速左右晃动两次也能打开口袋"
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
