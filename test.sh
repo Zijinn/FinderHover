@@ -35,12 +35,12 @@ rm -f "$ROOT/TestResults/menu.json"
 "$APP" --menu-test "$ROOT/TestResults/menu.json"
 rm -f "$ROOT/TestResults/animation.json"
 "$APP" --animation-test "$ROOT/TestResults/animation.json"
-for asset in settings permission; do
-    rm -f "$ROOT/TestResults/$asset.png" "$ROOT/TestResults/$asset.png.json"
-done
-rm -f "$ROOT/TestResults"/settings-p*.png "$ROOT/TestResults/settings-window.png"
-"$APP" --render-settings "$ROOT/TestResults/settings.png"
-"$APP" --render-permission "$ROOT/TestResults/permission.png"
+rm -f "$ROOT/TestResults"/settings*.png "$ROOT/TestResults"/settings*.json
+rm -f "$ROOT/TestResults"/permission*.png "$ROOT/TestResults"/permission*.json
+"$APP" --render-settings "$ROOT/TestResults/settings.png" --appearance light
+"$APP" --render-permission "$ROOT/TestResults/permission.png" --appearance light
+"$APP" --render-settings "$ROOT/TestResults/settings-dark.png" --appearance dark
+"$APP" --render-permission "$ROOT/TestResults/permission-dark.png" --appearance dark
 python3 - "$ROOT" <<'PY'
 import json, struct, sys
 from pathlib import Path
@@ -144,6 +144,8 @@ assert menu_report['unresolvedSelectors'] == 0, menu_report
 assert menu_report['emptySubmenuCount'] == 0, menu_report
 assert menu_report['settingsPageCount'] == 4, menu_report
 assert menu_report['settingsManagedAppCount'] > 0, menu_report
+assert menu_report['settingsGlassMaterial'] in ('NSGlassEffectView', 'NSVisualEffectView-fallback',
+                                                'opaque-fallback'), menu_report
 assert menu_report['settingsSliderCount'] == 7, menu_report
 assert menu_report['settingsSwitchCount'] >= 3, menu_report
 assert menu_report['topLevelItemCount'] >= 9, menu_report
@@ -153,6 +155,7 @@ print(f"PASS: settings window builds ({menu_report['settingsPageCount']} pages, 
       f"{menu_report['settingsSidebarItemCount']} sidebar items, "
       f"{menu_report['settingsAppRowCount']} app rows, {menu_report['settingsSliderCount']} sliders, "
       f"{menu_report['settingsSwitchCount']} switches, {menu_report['settingsWindowSize']} pt)")
+print(f"PASS: settings window uses continuous glass surface ({menu_report['settingsGlassMaterial']})")
 settings_report = json.loads((root / 'settings.png.json').read_text())
 assert settings_report['pageCount'] == 4, settings_report
 assert len(settings_report['pages']) == 4, settings_report
@@ -162,13 +165,26 @@ for page in settings_report['pages']:
 assert settings_report['window']['pngBytes'] > 5000, settings_report['window']
 print('PASS: settings pages render (' + ', '.join(
     f"p{p['page']} {p['title']} {p['pixelsWide']}x{p['pixelsHigh']}" for p in settings_report['pages']) + ')')
+assert 'Aqua' in settings_report['appearance'], settings_report
 permission_report = json.loads((root / 'permission.png.json').read_text())
 assert permission_report['width'] == 560 and permission_report['height'] == 462, permission_report
 assert permission_report['pngBytes'] > 5000, permission_report
 assert permission_report['pixelsWide'] == 1120 and permission_report['pixelsHigh'] == 924, permission_report
+assert 'Aqua' in permission_report['appearance'], permission_report
 print(f"PASS: permission guide renders ({permission_report['pixelsWide']}x"
       f"{permission_report['pixelsHigh']}, translocated={permission_report['translocated']}, "
       f"trusted={permission_report['trusted']})")
+dark_settings = json.loads((root / 'settings-dark.png.json').read_text())
+assert dark_settings['pageCount'] == 4, dark_settings
+assert dark_settings['window']['pngBytes'] > 5000, dark_settings
+assert all('Dark' in page['appearance'] for page in dark_settings['pages']), dark_settings
+assert (root / 'settings-dark-window.png').read_bytes() != (root / 'settings-window.png').read_bytes()
+print('PASS: settings pages render in dark appearance')
+dark_permission = json.loads((root / 'permission-dark.png.json').read_text())
+assert dark_permission['pngBytes'] > 5000, dark_permission
+assert 'Dark' in dark_permission['appearance'], dark_permission
+assert (root / 'permission-dark.png').read_bytes() != (root / 'permission.png').read_bytes()
+print('PASS: permission guide renders in dark appearance')
 PY
 if [ "${1:-}" = '--integration' ]; then
     rm -f "$ROOT/TestResults/integration.json"

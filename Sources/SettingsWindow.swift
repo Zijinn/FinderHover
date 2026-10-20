@@ -24,8 +24,8 @@ private final class SidebarItemView: NSView {
     var isSelected = false {
         didSet {
             needsDisplay = true
-            label.textColor = isSelected ? .labelColor : .secondaryLabelColor
-            iconView.contentTintColor = isSelected ? .controlAccentColor : .secondaryLabelColor
+            label.textColor = isSelected ? .alternateSelectedControlTextColor : .labelColor
+            iconView.contentTintColor = isSelected ? .alternateSelectedControlTextColor : .secondaryLabelColor
         }
     }
 
@@ -50,7 +50,7 @@ private final class SidebarItemView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         guard isSelected else { return }
-        NSColor.controlAccentColor.withAlphaComponent(0.14).setFill()
+        NSColor.selectedContentBackgroundColor.setFill()
         NSBezierPath(roundedRect: bounds, xRadius: 7, yRadius: 7).fill()
     }
 
@@ -109,6 +109,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     private var window: NSWindow?
     private var contentHost: NSView?
+    private var glassMaterial = "uninitialized"
     private var sidebarItems: [SidebarItemView] = []
     private var currentPageView: NSView?
     private var currentPage = 0
@@ -128,6 +129,18 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     private let pageTitles = ["权限", "窗口切换", "临时口袋", "外观"]
     private let pageSymbols = ["lock.shield", "macwindow.on.rectangle", "tray.full", "slider.horizontal.3"]
+
+    private var prefersSolidSurface: Bool {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
+            || NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+    }
+
+    private var glassCardFill: NSColor {
+        NSColor(name: nil) { appearance in
+            let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            return NSColor.white.withAlphaComponent(dark ? 0.08 : 0.34)
+        }
+    }
 
     init(settings: SettingsStore, shortcuts: ShortcutManager, pocketStore: PocketStore,
          windowPanel: WindowListPanel, hooks: SettingsHooks) {
@@ -165,42 +178,74 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private func ensureWindow() -> NSWindow {
         if let window = window { return window }
         let window = NSWindow(contentRect: NSRect(origin: .zero, size: windowSize),
-                              styleMask: [.titled, .closable, .miniaturizable],
+                              styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
                               backing: .buffered, defer: false)
         window.title = "MacToolbox 设置"
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.titlebarSeparatorStyle = .none
+        window.isMovableByWindowBackground = true
+        window.isOpaque = false
+        window.backgroundColor = .clear
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.minSize = windowSize
 
         let root = FlippedContainerView(frame: NSRect(origin: .zero, size: windowSize))
+        root.wantsLayer = true
+        root.layer?.cornerRadius = 16
+        root.layer?.masksToBounds = true
         window.contentView = root
 
-        let sidebar = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: sidebarWidth, height: windowSize.height))
-        sidebar.material = .sidebar
-        sidebar.blendingMode = .behindWindow
-        sidebar.state = .active
+        let solidSurface = prefersSolidSurface
+        if !solidSurface, #available(macOS 26.0, *) {
+            let glass = NSGlassEffectView(frame: root.bounds)
+            glass.style = .regular
+            glass.cornerRadius = 16
+            glass.autoresizingMask = [.width, .height]
+            glass.setAccessibilityElement(false)
+            root.addSubview(glass)
+            glassMaterial = "NSGlassEffectView"
+        } else {
+            let fallback = NSVisualEffectView(frame: root.bounds)
+            fallback.material = .windowBackground
+            fallback.blendingMode = .behindWindow
+            fallback.state = .followsWindowActiveState
+            fallback.autoresizingMask = [.width, .height]
+            root.addSubview(fallback)
+            glassMaterial = solidSurface ? "opaque-fallback" : "NSVisualEffectView-fallback"
+            if solidSurface {
+                window.isOpaque = true
+                window.backgroundColor = .windowBackgroundColor
+            }
+        }
+
+        let sidebar = SidebarSurfaceView(frame: NSRect(x: 0, y: 0,
+                                                       width: sidebarWidth, height: windowSize.height))
         sidebar.autoresizingMask = [.height]
         root.addSubview(sidebar)
 
-        root.addSubview(UIKitBits.separator(frame: NSRect(x: sidebarWidth, y: 0, width: 0.5,
-                                                          height: windowSize.height)))
-
-        let appIcon = NSImageView(frame: NSRect(x: 16, y: 18, width: 22, height: 22))
+        let appIcon = NSImageView(frame: NSRect(x: 16, y: 44, width: 22, height: 22))
         appIcon.image = NSApp.applicationIconImage
         appIcon.imageScaling = .scaleProportionallyUpOrDown
         root.addSubview(appIcon)
         root.addSubview(UIKitBits.label("MacToolbox", size: 13, weight: .semibold,
-                                        frame: NSRect(x: 46, y: 20, width: 120, height: 18)))
+                                        frame: NSRect(x: 46, y: 46, width: 120, height: 18)))
 
         for (index, title) in pageTitles.enumerated() {
             let item = SidebarItemView(index: index, title: title, symbol: pageSymbols[index],
-                                       frame: NSRect(x: 12, y: 56 + CGFloat(index) * 36,
+                                       frame: NSRect(x: 12, y: 84 + CGFloat(index) * 36,
                                                      width: sidebarWidth - 24, height: 32))
             item.onClick = { [weak self] index in self?.selectPage(index) }
             item.isSelected = index == 0
             root.addSubview(item)
             sidebarItems.append(item)
         }
+
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.4.0"
+        root.addSubview(UIKitBits.label("版本 \(version)", size: 10, color: .tertiaryLabelColor,
+                                        frame: NSRect(x: 16, y: windowSize.height - 26,
+                                                      width: sidebarWidth - 32, height: 16)))
 
         let host = FlippedContainerView(frame: NSRect(x: sidebarWidth, y: 0,
                                                       width: windowSize.width - sidebarWidth,
@@ -237,9 +282,13 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     /// the page reads as one undifferentiated list.
     private func card(_ rect: NSRect, to page: NSView) -> RoundedBackgroundView {
         let view = RoundedBackgroundView(frame: rect)
-        view.cornerRadius = 10
-        view.fillColor = NSColor.labelColor.withAlphaComponent(0.035)
-        view.borderColor = NSColor.separatorColor.withAlphaComponent(0.55)
+        view.cornerRadius = 12
+        let solidSurface = prefersSolidSurface
+        view.fillColor = solidSurface ? .controlBackgroundColor : glassCardFill
+        view.fillAlpha = 1
+        view.borderColor = .separatorColor
+        view.borderAlpha = solidSurface ? 0.55 : 0.28
+        view.topHighlightColor = solidSurface ? nil : NSColor.white.withAlphaComponent(0.36)
         page.addSubview(view)
         return view
     }
@@ -250,7 +299,6 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         page.addSubview(UIKitBits.paragraph(subtitle, size: 13, color: .secondaryLabelColor,
                                             frame: NSRect(x: contentX, y: 56, width: contentWidth, height: 18),
                                             lines: 1))
-        page.addSubview(UIKitBits.separator(frame: NSRect(x: contentX, y: 86, width: contentWidth, height: 1)))
     }
 
     private func sectionLabel(_ title: String, at point: NSPoint, width: CGFloat, to parent: NSView) {
@@ -259,16 +307,18 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     }
 
     private func addSwitch(_ title: String, isOn: Bool, action: Selector,
-                           at point: NSPoint, to parent: NSView) -> NSSwitch {
-        let toggle = NSSwitch(frame: NSRect(x: point.x, y: point.y, width: 38, height: 22))
+                           at point: NSPoint, to parent: NSView,
+                           rightEdge: CGFloat? = nil) -> NSSwitch {
+        let toggleX = (rightEdge ?? parent.bounds.width - 16) - 38
+        let toggle = NSSwitch(frame: NSRect(x: toggleX, y: point.y, width: 38, height: 22))
         toggle.state = isOn ? .on : .off
         toggle.target = self
         toggle.action = action
         toggle.setAccessibilityLabel(title)
         parent.addSubview(toggle)
         parent.addSubview(UIKitBits.label(title, size: 13,
-                                          frame: NSRect(x: point.x + 48, y: point.y + 2,
-                                                        width: max(80, parent.bounds.width - point.x - 64),
+                                          frame: NSRect(x: point.x, y: point.y + 2,
+                                                        width: max(80, toggleX - point.x - 12),
                                                         height: 18)))
         lastSwitchCount += 1
         return toggle
@@ -312,13 +362,16 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         addHeader("权限", "窗口切换需要 macOS 的辅助功能权限，其余功能不受影响。", to: page)
 
         let trusted = hooks.isTrusted()
-        let status = card(NSRect(x: contentX, y: 104, width: contentWidth, height: 108), to: page)
+        let status = card(NSRect(x: contentX, y: 88, width: contentWidth, height: 108), to: page)
         let pill = StatusPillView(frame: NSRect(x: 16, y: 14, width: 80, height: 22))
         pill.text = trusted ? "已授权" : "未授权"
         pill.tint = trusted ? .systemGreen : .systemOrange
         let pillWidth = pill.intrinsicContentSize.width
         pill.frame = NSRect(x: 16, y: 14, width: pillWidth, height: 22)
         status.addSubview(pill)
+        status.addSubview(UIKitBits.label("辅助功能权限", size: 13, weight: .medium,
+                                          frame: NSRect(x: 28 + pillWidth, y: 17,
+                                                        width: 240, height: 18)))
 
         status.addSubview(UIKitBits.label(
             trusted ? "可以读取并切换任意应用的窗口。" : "悬停 Dock 不会列出窗口，口袋和快捷键仍可正常使用。",
@@ -343,7 +396,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         copy.frame = NSRect(x: 410, y: 72, width: 62, height: 22)
         status.addSubview(copy)
 
-        let steps = card(NSRect(x: contentX, y: 228, width: contentWidth, height: 190), to: page)
+        let steps = card(NSRect(x: contentX, y: 212, width: contentWidth, height: 190), to: page)
         let stepData = [
             ("打开系统设置的辅助功能面板", "点下方按钮直接跳到「隐私与安全性 → 辅助功能」。"),
             ("把 \(AppInstallation.fileName) 拖进列表",
@@ -358,12 +411,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         let open = NSButton(title: "打开辅助功能设置", target: self, action: #selector(openPermission))
         open.bezelStyle = .rounded
         open.bezelColor = .controlAccentColor
-        open.frame = NSRect(x: contentX, y: 432, width: 150, height: 30)
+        open.frame = NSRect(x: contentX, y: 416, width: 150, height: 30)
         page.addSubview(open)
 
         let reveal = NSButton(title: "在访达中显示", target: self, action: #selector(revealApp))
         reveal.bezelStyle = .rounded
-        reveal.frame = NSRect(x: contentX + 158, y: 432, width: 118, height: 30)
+        reveal.frame = NSRect(x: contentX + 158, y: 416, width: 118, height: 30)
         page.addSubview(reveal)
 
         let reset = NSButton(title: "重置权限", target: self, action: #selector(resetPermission))
@@ -371,22 +424,26 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         reset.isBordered = false
         reset.font = .systemFont(ofSize: 12)
         reset.contentTintColor = .secondaryLabelColor
-        reset.frame = NSRect(x: contentX + 288, y: 436, width: 76, height: 24)
+        reset.frame = NSRect(x: contentX + 288, y: 420, width: 76, height: 24)
         page.addSubview(reset)
 
         let copies = AppInstallation.duplicateCopies()
         let note: String
-        let noteColor: NSColor
         if !copies.isEmpty {
             let names = copies.map { ($0 as NSString).lastPathComponent }.joined(separator: "、")
             note = "检测到另外 \(copies.count) 份副本：\(names)。辅助功能按路径授权，只有上面「当前程序」这一份的开关有效。"
-            noteColor = .systemOrange
         } else {
             note = "重置会从系统设置中移除本应用的授权条目，用于修复开关变灰或授权失效；重置后需要重新添加。"
-            noteColor = .tertiaryLabelColor
         }
-        page.addSubview(UIKitBits.paragraph(note, size: 11, color: noteColor,
-                                            frame: NSRect(x: contentX, y: 476, width: contentWidth, height: 44),
+        let noteIcon = NSImageView(frame: NSRect(x: contentX, y: 462, width: 14, height: 14))
+        noteIcon.image = UIKitBits.symbol(copies.isEmpty ? "info.circle" : "exclamationmark.triangle.fill",
+                                          pointSize: 11)
+        noteIcon.contentTintColor = copies.isEmpty ? .tertiaryLabelColor : .systemOrange
+        page.addSubview(noteIcon)
+        page.addSubview(UIKitBits.paragraph(note, size: 11,
+                                            color: copies.isEmpty ? .tertiaryLabelColor : .secondaryLabelColor,
+                                            frame: NSRect(x: contentX + 20, y: 460,
+                                                          width: contentWidth - 20, height: 44),
                                             lines: 3))
     }
 
@@ -413,21 +470,23 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private func buildSwitcherPage(into page: NSView) {
         addHeader("窗口切换", "把鼠标停在 Dock 图标上，列出该应用正在运行的窗口。", to: page)
 
-        let top = card(NSRect(x: contentX, y: 104, width: contentWidth, height: 96), to: page)
+        let top = card(NSRect(x: contentX, y: 88, width: contentWidth, height: 96), to: page)
         _ = addSwitch("启用悬停切窗", isOn: settings.isToolEnabled(.windowSwitcher),
                       action: #selector(toggleSwitcher), at: NSPoint(x: 16, y: 14), to: top)
         addShortcutRow(role: .windowSwitcherPanel, title: "面板快捷键", y: 56, to: top)
 
         let installed = hooks.installedApps()
         let apps = settings.managedApps(installed: installed)
-        sectionLabel("启用哪些应用", at: NSPoint(x: contentX, y: 216), width: 130, to: page)
+        let masterEnabled = settings.isToolEnabled(.windowSwitcher)
+        sectionLabel("启用哪些应用", at: NSPoint(x: contentX, y: 200), width: 130, to: page)
 
         let selectAll = NSButton(title: "全选", target: self, action: #selector(selectAllApps))
         selectAll.bezelStyle = .inline
         selectAll.isBordered = false
         selectAll.font = .systemFont(ofSize: 11)
         selectAll.contentTintColor = .controlAccentColor
-        selectAll.frame = NSRect(x: contentX + 136, y: 212, width: 40, height: 22)
+        selectAll.frame = NSRect(x: contentX + 136, y: 196, width: 40, height: 22)
+        selectAll.isEnabled = masterEnabled
         selectAll.setAccessibilityHelp("启用列表里的全部应用")
         page.addSubview(selectAll)
 
@@ -436,27 +495,39 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         selectNone.isBordered = false
         selectNone.font = .systemFont(ofSize: 11)
         selectNone.contentTintColor = .secondaryLabelColor
-        selectNone.frame = NSRect(x: contentX + 182, y: 212, width: 52, height: 22)
+        selectNone.frame = NSRect(x: contentX + 182, y: 196, width: 52, height: 22)
+        selectNone.isEnabled = masterEnabled
         selectNone.setAccessibilityHelp("关闭列表里的全部应用")
         page.addSubview(selectNone)
 
-        let enabledCount = UIKitBits.label("\(apps.filter { $0.isEnabled }.count) / \(apps.count) 已启用",
-                                           size: 11, color: .secondaryLabelColor,
-                                           frame: NSRect(x: contentX + 360, y: 216, width: 152, height: 18))
+        let enabled = apps.filter { $0.isEnabled }.count
+        let countText = masterEnabled ? "\(enabled) / \(apps.count) 已启用"
+            : "已暂停 · \(enabled) / \(apps.count) 已启用"
+        let enabledCount = UIKitBits.label(countText, size: 11, color: .secondaryLabelColor,
+                                           frame: NSRect(x: contentX + 300, y: 200, width: 212, height: 18))
         enabledCount.alignment = .right
         page.addSubview(enabledCount)
 
-        _ = card(NSRect(x: contentX, y: 240, width: contentWidth, height: 246), to: page)
-        let scroll = NSScrollView(frame: NSRect(x: contentX + 1, y: 241, width: contentWidth - 2, height: 244))
+        let listCard = card(NSRect(x: contentX, y: 224, width: contentWidth, height: 270), to: page)
+        listCard.addSubview(UIKitBits.label("应用", size: 10, color: .secondaryLabelColor,
+                                            frame: NSRect(x: 40, y: 8, width: 100, height: 14)))
+        listCard.addSubview(columnLabel("启用", x: 197, y: 8, width: 40))
+        listCard.addSubview(columnLabel("最小化", x: 256, y: 8, width: 56))
+        listCard.addSubview(columnLabel("窗口数", x: 348, y: 8, width: 96))
+        listCard.addSubview(UIKitBits.separator(frame: NSRect(x: 0, y: 29, width: contentWidth - 2, height: 1)))
+
+        let rowHeight: CGFloat = 40
+        let scroll = NSScrollView(frame: NSRect(x: contentX + 1, y: 254, width: contentWidth - 2, height: 239))
         scroll.drawsBackground = false
-        scroll.hasVerticalScroller = CGFloat(apps.count) * 42 > 244
+        scroll.hasVerticalScroller = CGFloat(apps.count) * rowHeight > 239
         scroll.hasHorizontalScroller = false
         scroll.scrollerStyle = .overlay
         scroll.autohidesScrollers = true
         let document = FlippedContainerView(frame: NSRect(x: 0, y: 0, width: contentWidth - 14,
-                                                          height: max(244, CGFloat(apps.count) * 42)))
+                                                          height: max(239, CGFloat(apps.count) * rowHeight)))
         for (offset, app) in apps.enumerated() {
-            document.addSubview(appRow(app, y: CGFloat(offset) * 42, isLast: offset == apps.count - 1))
+            document.addSubview(appRow(app, y: CGFloat(offset) * rowHeight, height: rowHeight,
+                                       interactive: masterEnabled, isLast: offset == apps.count - 1))
         }
         scroll.documentView = document
         page.addSubview(scroll)
@@ -464,44 +535,54 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
         let add = NSButton(title: "添加其他应用…", target: self, action: #selector(addApp))
         add.bezelStyle = .rounded
-        add.frame = NSRect(x: contentX, y: 500, width: 130, height: 28)
+        add.frame = NSRect(x: contentX, y: 504, width: 130, height: 28)
         page.addSubview(add)
     }
 
-    private func appRow(_ app: ManagedApp, y: CGFloat, isLast: Bool) -> NSView {
-        let row = SettingsRowView(frame: NSRect(x: 0, y: y, width: contentWidth - 14, height: 42))
+    private func columnLabel(_ title: String, x: CGFloat, y: CGFloat, width: CGFloat) -> NSTextField {
+        let label = UIKitBits.label(title, size: 10, color: .secondaryLabelColor,
+                                    frame: NSRect(x: x, y: y, width: width, height: 14))
+        label.alignment = .center
+        return label
+    }
+
+    private func appRow(_ app: ManagedApp, y: CGFloat, height: CGFloat,
+                        interactive: Bool, isLast: Bool) -> NSView {
+        let row = SettingsRowView(frame: NSRect(x: 0, y: y, width: contentWidth - 14, height: height))
         row.showsSeparator = !isLast
 
-        let icon = NSImageView(frame: NSRect(x: 12, y: 11, width: 20, height: 20))
+        let icon = NSImageView(frame: NSRect(x: 12, y: 10, width: 20, height: 20))
         if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: app.bundleIdentifier) {
             icon.image = NSWorkspace.shared.icon(forFile: url.path)
         }
         row.addSubview(icon)
 
         row.addSubview(UIKitBits.label(app.displayName, size: 13,
-                                       frame: NSRect(x: 40, y: 11, width: 168, height: 20)))
+                                       frame: NSRect(x: 40, y: 10, width: 156, height: 20)))
 
-        let enable = AppActionButton(frame: NSRect(x: 208, y: 12, width: 64, height: 18))
+        let enable = AppActionButton(frame: NSRect(x: 208, y: 11, width: 18, height: 18))
         enable.setButtonType(.switch)
-        enable.title = "启用"
-        enable.font = .systemFont(ofSize: 12)
+        enable.title = ""
         enable.state = app.isEnabled ? .on : .off
         enable.target = self
         enable.action = #selector(toggleAppEnabled(_:))
         enable.bundleIdentifier = app.bundleIdentifier
+        enable.isEnabled = interactive
+        enable.setAccessibilityLabel("启用 \(app.displayName)")
         row.addSubview(enable)
 
-        let minimized = AppActionButton(frame: NSRect(x: 276, y: 12, width: 84, height: 18))
+        let minimized = AppActionButton(frame: NSRect(x: 276, y: 11, width: 18, height: 18))
         minimized.setButtonType(.switch)
-        minimized.title = "最小化"
-        minimized.font = .systemFont(ofSize: 12)
+        minimized.title = ""
         minimized.state = app.config.includeMinimized ? .on : .off
         minimized.target = self
         minimized.action = #selector(toggleAppMinimized(_:))
         minimized.bundleIdentifier = app.bundleIdentifier
+        minimized.isEnabled = interactive && app.isEnabled
+        minimized.setAccessibilityLabel("列出 \(app.displayName) 的最小化窗口")
         row.addSubview(minimized)
 
-        let popup = AppPopupButton(frame: NSRect(x: 364, y: 9, width: 84, height: 24), pullsDown: false)
+        let popup = AppPopupButton(frame: NSRect(x: 348, y: 8, width: 96, height: 24), pullsDown: false)
         popup.font = .systemFont(ofSize: 12)
         for count in [3, 6, 9, 12, 20, 40] {
             let item = NSMenuItem(title: "\(count) 个", action: nil, keyEquivalent: "")
@@ -512,6 +593,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         popup.target = self
         popup.action = #selector(changeMaxWindows(_:))
         popup.bundleIdentifier = app.bundleIdentifier
+        popup.isEnabled = interactive && app.isEnabled
         popup.setAccessibilityLabel("最多列出窗口数")
         row.addSubview(popup)
 
@@ -525,6 +607,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             remove.target = self
             remove.action = #selector(removeApp(_:))
             remove.bundleIdentifier = app.bundleIdentifier
+            remove.isEnabled = interactive
             row.addSubview(remove)
         }
 
@@ -536,32 +619,65 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private func buildPocketPage(into page: NSView) {
         addHeader("临时口袋", "把文件或图片先放进来，需要时再拖出去。", to: page)
 
-        let top = card(NSRect(x: contentX, y: 104, width: contentWidth, height: 96), to: page)
+        let top = card(NSRect(x: contentX, y: 88, width: contentWidth, height: 96), to: page)
         _ = addSwitch("启用临时口袋", isOn: settings.isToolEnabled(.pocket),
                       action: #selector(togglePocket), at: NSPoint(x: 16, y: 14), to: top)
         addShortcutRow(role: .pocket, title: "口袋快捷键", y: 56, to: top)
 
-        let info = card(NSRect(x: contentX, y: 212, width: contentWidth, height: 132), to: page)
-        sectionLabel("当前口袋", at: NSPoint(x: 16, y: 14), width: 200, to: info)
+        let info = card(NSRect(x: contentX, y: 196, width: contentWidth, height: 96), to: page)
+        let tray = NSImageView(frame: NSRect(x: 16, y: 16, width: 20, height: 20))
+        tray.image = UIKitBits.symbol("tray.full", pointSize: 16)
+        tray.contentTintColor = .controlAccentColor
+        info.addSubview(tray)
+        sectionLabel("当前口袋", at: NSPoint(x: 48, y: 14), width: 200, to: info)
         info.addSubview(UIKitBits.label("\(pocketStore.count) 项", size: 22, weight: .medium,
-                                        frame: NSRect(x: 16, y: 36, width: 200, height: 28)))
+                                        frame: NSRect(x: 48, y: 32, width: 200, height: 28)))
 
         let open = NSButton(title: "打开口袋", target: self, action: #selector(openPocket))
         open.bezelStyle = .rounded
-        open.frame = NSRect(x: 16, y: 86, width: 110, height: 28)
+        open.frame = NSRect(x: 280, y: 34, width: 110, height: 28)
         open.isEnabled = settings.isToolEnabled(.pocket)
         info.addSubview(open)
 
         let clear = NSButton(title: "清空", target: self, action: #selector(clearPocket))
         clear.bezelStyle = .rounded
-        clear.frame = NSRect(x: 134, y: 86, width: 80, height: 28)
+        clear.frame = NSRect(x: 398, y: 34, width: 80, height: 28)
         clear.isEnabled = pocketStore.count > 0
         info.addSubview(clear)
 
+        sectionLabel("使用方式", at: NSPoint(x: contentX, y: 308), width: 200, to: page)
+        let usage = card(NSRect(x: contentX, y: 332, width: contentWidth, height: 156), to: page)
+        let descriptions = [
+            ("hand.draw", "拖动文件时左右晃动鼠标", "口袋出现在光标旁，不松手把文件放进去。"),
+            ("keyboard", "按 ⌥Space 随时打开", "也可以晃动菜单栏图标两次，或从菜单打开。"),
+            ("doc.on.doc", "拖出默认复制", "条目仍留在口袋中；普通文件保留原位置。")
+        ]
+        for (offset, description) in descriptions.enumerated() {
+            usage.addSubview(pocketUsageRow(symbol: description.0, title: description.1,
+                                            detail: description.2, y: CGFloat(8 + offset * 48)))
+            if offset < descriptions.count - 1 {
+                usage.addSubview(UIKitBits.separator(
+                    frame: NSRect(x: 16, y: CGFloat(55 + offset * 48), width: contentWidth - 34, height: 1)))
+            }
+        }
+
         page.addSubview(UIKitBits.paragraph(
             "口袋内容只保存在本次运行中，退出应用即清空。普通文件保留原位置，拖出时默认复制；从剪贴板导入的截图会另存为临时 PNG，清空时一并删除。",
-            size: 12, color: .secondaryLabelColor,
-            frame: NSRect(x: contentX, y: 364, width: contentWidth, height: 60), lines: 3))
+            size: 11, color: .tertiaryLabelColor,
+            frame: NSRect(x: contentX, y: 500, width: contentWidth, height: 32), lines: 2))
+    }
+
+    private func pocketUsageRow(symbol: String, title: String, detail: String, y: CGFloat) -> NSView {
+        let row = FlippedContainerView(frame: NSRect(x: 0, y: y, width: contentWidth - 2, height: 48))
+        let icon = NSImageView(frame: NSRect(x: 16, y: 16, width: 16, height: 16))
+        icon.image = UIKitBits.symbol(symbol, pointSize: 12, weight: .medium)
+        icon.contentTintColor = .secondaryLabelColor
+        row.addSubview(icon)
+        row.addSubview(UIKitBits.label(title, size: 13, weight: .medium,
+                                       frame: NSRect(x: 44, y: 8, width: 440, height: 18)))
+        row.addSubview(UIKitBits.label(detail, size: 11, color: .secondaryLabelColor,
+                                       frame: NSRect(x: 44, y: 26, width: 440, height: 16)))
+        return row
     }
 
     // MARK: - Page: appearance
@@ -607,23 +723,29 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         metricKeys.removeAll()
         lastSliderCount = 0
 
-        let panel = card(NSRect(x: contentX, y: 104, width: contentWidth, height: 360), to: page)
+        let panel = card(NSRect(x: contentX, y: 88, width: contentWidth, height: 360), to: page)
         for (offset, definition) in metricDefinitions.enumerated() {
             panel.addSubview(metricRow(definition, y: CGFloat(12 + offset * 48)))
+            if offset < metricDefinitions.count - 1 {
+                panel.addSubview(UIKitBits.separator(
+                    frame: NSRect(x: 16, y: CGFloat(12 + offset * 48 + 44),
+                                  width: contentWidth - 34, height: 1)))
+            }
             lastSliderCount += 1
         }
 
         _ = addSwitch("宽度自适应标题", isOn: settings.metrics.autoFitWidth,
-                      action: #selector(toggleAutoFit), at: NSPoint(x: contentX, y: 476), to: page)
+                      action: #selector(toggleAutoFit), at: NSPoint(x: contentX, y: 460),
+                      to: page, rightEdge: contentX + contentWidth)
 
         let reset = NSButton(title: "恢复默认外观", target: self, action: #selector(resetMetrics))
         reset.bezelStyle = .rounded
-        reset.frame = NSRect(x: contentX, y: 504, width: 120, height: 28)
+        reset.frame = NSRect(x: contentX, y: 488, width: 120, height: 28)
         page.addSubview(reset)
 
         let preview = NSButton(title: "预览面板", target: self, action: #selector(showPreview))
         preview.bezelStyle = .rounded
-        preview.frame = NSRect(x: contentX + 128, y: 504, width: 100, height: 28)
+        preview.frame = NSRect(x: contentX + 128, y: 488, width: 100, height: 28)
         page.addSubview(preview)
     }
 
@@ -663,6 +785,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     @objc private func toggleSwitcher(_ sender: NSSwitch) {
         settings.setToolEnabled(sender.state == .on, for: .windowSwitcher)
+        rebuildPage()
     }
 
     @objc private func togglePocket(_ sender: NSSwitch) {
@@ -672,6 +795,16 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     @objc private func toggleAppEnabled(_ sender: AppActionButton) {
         settings.setEnabled(sender.state == .on, for: sender.bundleIdentifier)
+        guard let row = sender.superview else { return }
+        for case let button as AppActionButton in row.subviews
+        where button !== sender && button.bundleIdentifier == sender.bundleIdentifier
+            && button.title.isEmpty {
+            button.isEnabled = sender.state == .on
+        }
+        for case let popup as AppPopupButton in row.subviews
+        where popup.bundleIdentifier == sender.bundleIdentifier {
+            popup.isEnabled = sender.state == .on
+        }
     }
 
     /// Bulk toggles only touch apps that are actually installed, so the stored flags
@@ -819,9 +952,20 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         // scale the content lands in the bottom-left quarter of the bitmap.
         context.cgContext.scaleBy(x: CGFloat(bitmap.pixelsWide) / view.bounds.width,
                                   y: CGFloat(bitmap.pixelsHigh) / view.bounds.height)
-        context.cgContext.setFillColor(NSColor.windowBackgroundColor.cgColor)
-        context.cgContext.fill(view.bounds)
-        cache.draw(in: view.bounds)
+        // Dynamic colours resolve against the current drawing appearance. Without
+        // this, dark mode produced white labels on a light background in the cache.
+        view.effectiveAppearance.performAsCurrentDrawingAppearance {
+            let isDark = view.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            let colors = isDark
+                ? [NSColor(calibratedRed: 0.09, green: 0.12, blue: 0.17, alpha: 1),
+                   NSColor(calibratedRed: 0.16, green: 0.20, blue: 0.26, alpha: 1)]
+                : [NSColor(calibratedRed: 0.87, green: 0.91, blue: 0.96, alpha: 1),
+                   NSColor(calibratedRed: 0.96, green: 0.93, blue: 0.88, alpha: 1)]
+            NSGradient(colors: colors)?.draw(in: view.bounds, angle: -70)
+            let image = NSImage(size: view.bounds.size)
+            image.addRepresentation(cache)
+            image.draw(in: view.bounds, from: .zero, operation: .sourceOver, fraction: 1)
+        }
         NSGraphicsContext.restoreGraphicsState()
         guard let png = bitmap.representation(using: .png, properties: [:]) else {
             return ["error": "无法编码 PNG"]
@@ -844,9 +988,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             var entry = compose(page, to: URL(fileURLWithPath: path))
             entry["page"] = index
             entry["title"] = pageTitles[index]
+            entry["appearance"] = NSApp.effectiveAppearance.name.rawValue
             pages.append(entry)
         }
-        return ["pageCount": pages.count, "pages": pages]
+        return ["pageCount": pages.count, "pages": pages,
+                "appearance": NSApp.effectiveAppearance.name.rawValue]
     }
 
     func renderWindow(to basePath: String) -> [String: Any] {
@@ -854,7 +1000,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         selectPage(0)
         guard let window = window, let view = window.contentView else { return ["error": "无窗口"] }
         let path = basePath.replacingOccurrences(of: ".png", with: "-window.png")
-        return compose(view, to: URL(fileURLWithPath: path))
+        var report = compose(view, to: URL(fileURLWithPath: path))
+        report["appearance"] = NSApp.effectiveAppearance.name.rawValue
+        return report
     }
 
     /// Builds every page offscreen so the menu smoke test can prove the whole
@@ -881,6 +1029,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         selectPage(saved)
         let managed = settings.managedApps(installed: hooks.installedApps()).count
         return ["settingsWindowConstructed": window != nil,
+                "settingsGlassMaterial": glassMaterial,
                 "settingsPageCount": pageTitles.count,
                 "settingsSidebarItemCount": sidebarItems.count,
                 "settingsPageSubviewCounts": pageSubviewCounts,

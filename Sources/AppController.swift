@@ -61,6 +61,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.setActivationPolicy(.accessory)
         if let appearance = value(after: "--appearance") {
             windowPanel.setAppearance(appearance)
+            NSApp.appearance = NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua)
         }
         windowPanel.onSelect = { [weak self] entry in
             guard let self = self else { return }

@@ -6,12 +6,27 @@ final class FlippedContainerView: NSView {
     override var isFlipped: Bool { true }
 }
 
+/// Subtle tonal layer that lets one continuous glass surface read as a sidebar
+/// without an opaque panel or a vertical rule.
+final class SidebarSurfaceView: NSView {
+    override var isFlipped: Bool { true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        NSColor.white.withAlphaComponent(dark ? 0.04 : 0.15).setFill()
+        NSBezierPath(rect: bounds).fill()
+    }
+}
+
 /// Flat rounded surface used for cards, pills and status strips. Drawn rather than
 /// layered so it renders identically in a view cache (which is how previews and
 /// tests capture it).
 final class RoundedBackgroundView: NSView {
     var fillColor: NSColor = .quaternaryLabelColor { didSet { needsDisplay = true } }
+    var fillAlpha: CGFloat = 1 { didSet { needsDisplay = true } }
     var borderColor: NSColor? { didSet { needsDisplay = true } }
+    var borderAlpha: CGFloat = 1 { didSet { needsDisplay = true } }
+    var topHighlightColor: NSColor? { didSet { needsDisplay = true } }
     var cornerRadius: CGFloat = 8 { didSet { needsDisplay = true } }
 
     override var isFlipped: Bool { true }
@@ -19,13 +34,31 @@ final class RoundedBackgroundView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.25, dy: 0.25),
                                 xRadius: cornerRadius, yRadius: cornerRadius)
-        fillColor.setFill()
+        fillColor.withAlphaComponent(fillColor.alphaComponent * fillAlpha).setFill()
         path.fill()
         if let borderColor = borderColor {
-            borderColor.setStroke()
+            borderColor.withAlphaComponent(borderColor.alphaComponent * borderAlpha).setStroke()
             path.lineWidth = 0.5
             path.stroke()
         }
+        if let topHighlightColor = topHighlightColor {
+            NSGraphicsContext.saveGraphicsState()
+            path.addClip()
+            topHighlightColor.setFill()
+            NSBezierPath(rect: NSRect(x: 0, y: 0, width: bounds.width, height: 0.5)).fill()
+            NSGraphicsContext.restoreGraphicsState()
+        }
+    }
+}
+
+/// Hairline that resolves `separatorColor` at draw time. A layer-backed colour
+/// would freeze the light-mode value when the system switches appearance.
+final class SeparatorView: NSView {
+    override var isFlipped: Bool { true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.separatorColor.setFill()
+        NSBezierPath(rect: bounds).fill()
     }
 }
 
@@ -87,10 +120,7 @@ enum UIKitBits {
     }
 
     static func separator(frame: NSRect) -> NSView {
-        let view = NSView(frame: frame)
-        view.wantsLayer = true
-        view.layer?.backgroundColor = NSColor.separatorColor.cgColor
-        return view
+        SeparatorView(frame: frame)
     }
 
     static func symbol(_ name: String, pointSize: CGFloat, weight: NSFont.Weight = .regular) -> NSImage? {

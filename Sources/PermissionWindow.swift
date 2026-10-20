@@ -13,6 +13,7 @@ final class PermissionWindowController: NSObject, NSWindowDelegate {
     private var statusPill: StatusPillView?
     private var subtitleLabel: NSTextField?
     private var tipBox: RoundedBackgroundView?
+    private var tipIcon: NSImageView?
     private var tipLabel: NSTextField?
     private var primaryButton: NSButton?
     private var pollTimer: Timer?
@@ -131,8 +132,14 @@ final class PermissionWindowController: NSObject, NSWindowDelegate {
         root.addSubview(tip)
         tipBox = tip
 
+        let icon = NSImageView(frame: NSRect(x: 12, y: 11, width: 14, height: 14))
+        icon.image = UIKitBits.symbol("info.circle", pointSize: 11)
+        icon.contentTintColor = .secondaryLabelColor
+        tip.addSubview(icon)
+        tipIcon = icon
+
         let tipText = UIKitBits.paragraph("", size: 12, color: .secondaryLabelColor,
-                                          frame: NSRect(x: 12, y: 8, width: 480, height: 44), lines: 3)
+                                          frame: NSRect(x: 32, y: 8, width: 456, height: 44), lines: 3)
         tip.addSubview(tipText)
         tipLabel = tipText
 
@@ -210,33 +217,29 @@ final class PermissionWindowController: NSObject, NSWindowDelegate {
         primaryButton?.title = trusted ? "完成" : "打开辅助功能设置"
         primaryButton?.keyEquivalent = trusted ? "\r" : "\r"
 
-        if let tipBox = tipBox, let tipLabel = tipLabel {
+        if let tipBox = tipBox, let tipLabel = tipLabel, let tipIcon = tipIcon {
+            let warning = isTranslocated || AppInstallation.isAdHocSigned || !duplicates.isEmpty || didReset
             if isTranslocated {
-                tipBox.fillColor = NSColor.systemOrange.withAlphaComponent(0.12)
-                tipLabel.textColor = .labelColor
                 tipLabel.stringValue = "当前从磁盘映像运行。授权会绑定到临时路径，退出后失效 —— 请先把 \(AppInstallation.fileName) 拖到「应用程序」文件夹，再从那里打开。"
             } else if AppInstallation.isAdHocSigned {
-                tipBox.fillColor = NSColor.systemOrange.withAlphaComponent(0.12)
-                tipLabel.textColor = .labelColor
                 tipLabel.stringValue = "当前副本是 ad-hoc 签名，没有固定身份：授权绑定在文件哈希上，重新安装或更新后就会失效。请使用带证书签名的构建版本。"
             } else if !duplicates.isEmpty {
-                tipBox.fillColor = NSColor.systemOrange.withAlphaComponent(0.12)
-                tipLabel.textColor = .labelColor
                 let names = duplicates.map { ($0 as NSString).lastPathComponent }.joined(separator: "、")
                 tipLabel.stringValue = "检测到另外 \(duplicates.count) 份副本：\(names)。辅助功能按路径授权，只有上面「当前程序」这一份的开关有效。"
             } else if didReset {
-                tipBox.fillColor = NSColor.systemOrange.withAlphaComponent(0.12)
-                tipLabel.textColor = .labelColor
                 tipLabel.stringValue = "已重置。列表里的旧条目已移除，请重新添加 \(AppInstallation.fileName) 并打开开关。"
             } else if trusted {
-                tipBox.fillColor = NSColor.systemGreen.withAlphaComponent(0.12)
-                tipLabel.textColor = .labelColor
                 tipLabel.stringValue = "已完成。窗口切换现在可用，无需重启应用。"
             } else {
-                tipBox.fillColor = .quaternaryLabelColor
-                tipLabel.textColor = .secondaryLabelColor
                 tipLabel.stringValue = "列表里已有 \(AppInstallation.listName) 但开关是灰的？先点「−」移除，再重新添加一次。"
             }
+            tipLabel.textColor = .secondaryLabelColor
+            tipBox.fillColor = warning ? NSColor.systemOrange.withAlphaComponent(0.08)
+                : trusted ? NSColor.systemGreen.withAlphaComponent(0.10) : .quaternaryLabelColor
+            tipIcon.image = UIKitBits.symbol(warning ? "exclamationmark.triangle.fill"
+                                             : trusted ? "checkmark.circle.fill" : "info.circle",
+                                             pointSize: 11)
+            tipIcon.contentTintColor = warning ? .systemOrange : trusted ? .systemGreen : .secondaryLabelColor
         }
 
         if flippedToTrusted {
@@ -333,9 +336,13 @@ final class PermissionWindowController: NSObject, NSWindowDelegate {
         NSGraphicsContext.current = context
         context.cgContext.scaleBy(x: CGFloat(bitmap.pixelsWide) / view.bounds.width,
                                   y: CGFloat(bitmap.pixelsHigh) / view.bounds.height)
-        context.cgContext.setFillColor(NSColor.windowBackgroundColor.cgColor)
-        context.cgContext.fill(view.bounds)
-        cache.draw(in: view.bounds)
+        view.effectiveAppearance.performAsCurrentDrawingAppearance {
+            NSColor.windowBackgroundColor.setFill()
+            NSBezierPath(rect: view.bounds).fill()
+            let image = NSImage(size: view.bounds.size)
+            image.addRepresentation(cache)
+            image.draw(in: view.bounds, from: .zero, operation: .sourceOver, fraction: 1)
+        }
         NSGraphicsContext.restoreGraphicsState()
         guard let png = bitmap.representation(using: .png, properties: [:]) else {
             return ["error": "无法编码 PNG"]
@@ -344,6 +351,7 @@ final class PermissionWindowController: NSObject, NSWindowDelegate {
         return ["pngBytes": png.count,
                 "width": Int(view.bounds.width), "height": Int(view.bounds.height),
                 "pixelsWide": bitmap.pixelsWide, "pixelsHigh": bitmap.pixelsHigh,
-                "trusted": service.trusted, "translocated": isTranslocated]
+                "trusted": service.trusted, "translocated": isTranslocated,
+                "appearance": NSApp.effectiveAppearance.name.rawValue]
     }
 }
