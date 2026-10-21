@@ -722,7 +722,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
              "上游强制非流式请求，代理重建 Claude 客户端需要的事件流。"),
             ("network", "独立端口", "每个接口可分别启动、停止和测试，互不影响。"),
             ("key", "密钥与本机",
-             "密钥保存在 macOS 钥匙串；配置位于 ~/Library/Application Support/RelayBridge。")
+             "默认不读取钥匙串，使用客户端密钥；配置位于 ~/Library/Application Support/RelayBridge。")
         ]
         for (offset, row) in rows.enumerated() {
             info.addSubview(pocketUsageRow(symbol: row.0, title: row.1, detail: row.2,

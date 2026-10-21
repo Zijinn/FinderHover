@@ -82,7 +82,7 @@ def stream_with_context(generator):
     return generator
 
 config = {
-    "target_url": "https://api.example.com",
+    "target_url": "",
     "api_key": "",
     "port": 8080,
     "is_running": False,

@@ -5,7 +5,7 @@ import Security
 struct RelayProfile: Codable, Identifiable, Equatable, Sendable {
     var id = UUID().uuidString
     var name = "新中转接口"
-    var upstream = "https://"
+    var upstream = ""
     var port = 8182
     var model = ""
     var overrideModel = false
@@ -67,6 +67,9 @@ final class BridgeStore: ObservableObject {
     @Published var notes: [String: String] = [:]
     @Published var notice = ""
     @Published var importing = false
+    @Published var keychainEnabled: Bool {
+        didSet { UserDefaults.standard.set(keychainEnabled, forKey: "relaybridge.keychainEnabled") }
+    }
 
     private var processes: [String: Process] = [:]
     private var outputs: [String: FileHandle] = [:]
@@ -87,6 +90,7 @@ final class BridgeStore: ObservableObject {
         sessionConfig.timeoutIntervalForRequest = 310
         sessionConfig.timeoutIntervalForResource = 320
         session = URLSession(configuration: sessionConfig)
+        keychainEnabled = UserDefaults.standard.bool(forKey: "relaybridge.keychainEnabled")
         do {
             try FileManager.default.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dataDirectory.path)
@@ -94,8 +98,8 @@ final class BridgeStore: ObservableObject {
             if FileManager.default.fileExists(atPath: file.path) {
                 profiles = try JSONDecoder().decode([RelayProfile].self, from: Data(contentsOf: file))
             } else {
-                profiles = [RelayProfile(name: "local-relay", upstream: "https://api.example.com",
-                    port: 8182, model: "claude-opus-4-8", mode: "justwoker", auth: "x-api-key")]
+                profiles = [RelayProfile(name: "本地中转", upstream: "",
+                    port: 8182, model: "", mode: "generic", auth: "preserve")]
                 try persist()
             }
             selectedID = profiles.first?.id
@@ -153,7 +157,7 @@ final class BridgeStore: ObservableObject {
     }
 
     @discardableResult
-    func save(_ draft: RelayProfile, key: String) -> Bool {
+    func save(_ draft: RelayProfile, key: String, updateKey: Bool = true) -> Bool {
         do {
             var item = draft
             item.name = item.name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -163,7 +167,9 @@ final class BridgeStore: ObservableObject {
             guard !active.contains(item.id), !pending.contains(item.id) else {
                 throw BridgeFailure.message("请先停止该接口，再保存修改。")
             }
-            try Vault.write(key.trimmingCharacters(in: .whitespacesAndNewlines), id: item.id)
+            if updateKey && keychainEnabled {
+                try Vault.write(key.trimmingCharacters(in: .whitespacesAndNewlines), id: item.id)
+            }
             if let index = profiles.firstIndex(where: { $0.id == item.id }) { profiles[index] = item }
             try persist()
             notes[item.id] = "已保存。密钥由客户端转发，或使用钥匙串中的备用密钥。"
@@ -175,7 +181,7 @@ final class BridgeStore: ObservableObject {
         guard !testing.contains(id) else { return }
         stop(id)
         profiles.removeAll { $0.id == id }
-        try? Vault.write("", id: id)
+        if keychainEnabled { try? Vault.write("", id: id) }
         selectedID = profiles.first?.id
         do { try persist() } catch { notice = error.localizedDescription }
     }
@@ -218,7 +224,7 @@ final class BridgeStore: ObservableObject {
             processes[id] = process
             outputs[id] = output
             var config = item.pythonConfig
-            config["apiKey"] = Vault.read(id)
+            config["apiKey"] = keychainEnabled ? Vault.read(id) : ""
             var bytes = try JSONSerialization.data(withJSONObject: config)
             bytes.append(0x0A)
             try input.fileHandleForWriting.write(contentsOf: bytes)
@@ -262,6 +268,9 @@ final class BridgeStore: ObservableObject {
 
     func test(_ id: String) async {
         guard let item = profile(id), !testing.contains(id) else { return }
+        guard keychainEnabled else {
+            notes[id] = "钥匙串读取已关闭；请在客户端测试正文。"; return
+        }
         guard !item.model.isEmpty else { notes[id] = "先填写测试 / 展示模型并保存。"; return }
         guard !Vault.read(id).isEmpty else {
             notes[id] = "内置测试需要钥匙串密钥。也可不保存密钥，直接在客户端测试。"; return
@@ -339,19 +348,21 @@ final class BridgeStore: ObservableObject {
                 guard let source = row["sourceID"] as? String,
                       !profiles.contains(where: { $0.sourceID == source }) else { continue }
                 let upstream = row["upstream"] as? String ?? ""
-                let just = URLComponents(string: upstream)?.host == "api.example.com"
-                var item = RelayProfile(name: row["name"] as? String ?? "中转接口", upstream: upstream,
+                let item = RelayProfile(name: row["name"] as? String ?? "中转接口", upstream: upstream,
                     port: nextPort(), model: row["model"] as? String ?? "",
-                    mode: just ? "justwoker" : "generic", auth: just ? "x-api-key" : "bearer", sourceID: source)
-                if item.model.isEmpty && just { item.model = "claude-opus-4-8" }
+                    mode: "generic", auth: "bearer", sourceID: source)
                 try validate(item)
-                try Vault.write(row["apiKey"] as? String ?? "", id: item.id)
+                if keychainEnabled {
+                    try Vault.write(row["apiKey"] as? String ?? "", id: item.id)
+                }
                 profiles.append(item)
                 if count == 0 { selectedID = item.id }
                 count += 1
             }
             try persist()
-            notice = "已导入 \(count) 个接口。原 CC Switch 配置未改动，密钥已放入本机钥匙串。"
+            notice = keychainEnabled
+                ? "已导入 \(count) 个接口。原 CC Switch 配置未改动，密钥已放入本机钥匙串。"
+                : "已导入 \(count) 个接口。原 CC Switch 配置未改动；钥匙串读取已关闭，请使用客户端密钥。"
         } catch { notice = error.localizedDescription }
     }
 
@@ -361,7 +372,7 @@ struct ProfileEditor: View {
     @ObservedObject var store: BridgeStore
     @State var draft: RelayProfile
     @State private var key = ""
-    @State private var loaded = false
+    @State private var keyEdited = false
     @State private var showDelete = false
 
     var running: Bool { store.active.contains(draft.id) }
@@ -412,7 +423,13 @@ struct ProfileEditor: View {
                         Text("Bearer Token").tag("bearer")
                         Text("x-api-key").tag("x-api-key")
                     }
-                    SecureField("备用 API Key（可选）", text: $key)
+                    Toggle("读取钥匙串备用密钥", isOn: $store.keychainEnabled)
+                    if store.keychainEnabled {
+                        SecureField("备用 API Key（可选）", text: Binding(
+                            get: { key },
+                            set: { key = $0; keyEdited = true }
+                        ))
+                    }
                     HStack {
                         Text("请求超时（秒）")
                         Spacer()
@@ -424,7 +441,16 @@ struct ProfileEditor: View {
                 .disabled(running || starting)
 
                 VStack(alignment: .leading, spacing: 7) {
-                    Label("密钥仅保存在本机钥匙串，也可以留空由客户端发送。", systemImage: "key")
+                    Label(store.keychainEnabled
+                          ? "密钥仅保存在本机钥匙串，也可以留空由客户端发送。"
+                          : "钥匙串读取已关闭；使用客户端发送的密钥。",
+                          systemImage: "key")
+                    if store.keychainEnabled {
+                        Text("已保存的备用密钥不会显示；留空保存会保留钥匙串中的原值。")
+                        Text("首次读取旧 RelayBridge 密钥时，macOS 可能询问一次；选择「始终允许」即可。")
+                    } else {
+                        Text("默认不读取钥匙串，不会弹出钥匙串权限；启动代理时只转发客户端密钥。")
+                    }
                     Text(draft.mode == "justwoker"
                          ? "工具兼容仅适用于 justwoker 类接口，会调整工具定义与 token 统计。"
                          : "保留模型、工具定义、思考签名与 token 统计；仅把上游请求改为非流式。")
@@ -432,17 +458,24 @@ struct ProfileEditor: View {
                 }.font(.caption).foregroundStyle(.secondary)
 
                 HStack(spacing: 12) {
-                    Button("保存设置") { store.save(draft, key: key) }.disabled(running || starting)
+                    Button("保存设置") {
+                        store.save(draft, key: key, updateKey: keyEdited)
+                    }.disabled(running || starting)
                     Button(running ? "停止代理" : "启动代理") {
                         if running { store.stop(draft.id) }
-                        else if store.save(draft, key: key) { Task { await store.start(draft.id) } }
+                        else if store.save(draft, key: key, updateKey: keyEdited) {
+                            Task { await store.start(draft.id) }
+                        }
                     }.buttonStyle(.borderedProminent).disabled(starting)
                         .accessibilityLabel(running ? "停止代理" : "启动代理")
                         .accessibilityIdentifier("toggleProxy")
                     Button("测试正文") {
-                        if running || store.save(draft, key: key) { Task { await store.test(draft.id) } }
+                        if running || store.save(draft, key: key, updateKey: keyEdited) {
+                            Task { await store.test(draft.id) }
+                        }
                     }
-                        .disabled(starting || store.testing.contains(draft.id))
+                        .disabled(starting || store.testing.contains(draft.id) || !store.keychainEnabled)
+                        .help(store.keychainEnabled ? "" : "钥匙串读取已关闭；请在客户端测试")
                     if store.testing.contains(draft.id) || starting { ProgressView().controlSize(.small) }
                     Spacer()
                     Button(role: .destructive) { showDelete = true } label: { Image(systemName: "trash") }
@@ -459,9 +492,6 @@ struct ProfileEditor: View {
                         .font(.callout).frame(maxWidth: .infinity, alignment: .leading).padding(8)
                 }
             }.padding(28)
-        }
-        .onAppear {
-            if !loaded { key = Vault.read(draft.id); loaded = true }
         }
         .alert("删除此接口？", isPresented: $showDelete) {
             Button("删除", role: .destructive) { store.remove(draft.id) }

@@ -31,3 +31,9 @@ DerivedData/
 # Python bytecode
 __pycache__/
 *.pyc
+
+# RelayBridge runtime data: may contain upstream URLs, profile names and logs
+profiles.json
+cc-switch.db
+*.log
+logs/

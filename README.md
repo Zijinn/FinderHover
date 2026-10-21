@@ -48,11 +48,12 @@
 
 - 管理多个 Anthropic Messages 中转接口：每个接口使用独立本机端口，可分别启动、停止和测试。
 - 上游请求强制非流式，代理重建 Claude Code / Claude Desktop 需要的 SSE 事件；支持通用模式和 justwoker 工具兼容模式。
-- 支持从 CC Switch 导入 Claude Desktop 供应商；密钥保存在 macOS 钥匙串，配置在 `~/Library/Application Support/RelayBridge/profiles.json`。
+- 支持从 CC Switch 导入 Claude Desktop 供应商；导入后默认为通用模式，需要时手动切换 justwoker 工具兼容。配置在 `~/Library/Application Support/RelayBridge/profiles.json`。
+- **默认不读取钥匙串**，只使用客户端发送的密钥；需要备用密钥时在管理窗口打开「读取钥匙串备用密钥」。不开启时不会触发钥匙串权限询问。
 - 关闭管理窗口后代理继续运行；可从菜单停止全部代理，退出 MacToolbox 会停止它启动的代理。
 - 运行时需要 Python 3（优先 Anaconda、Homebrew，最后系统 Python）；`bridge.py` 与 `justwoker_compat.py` 已随应用打包。
-- 仅提供 Anthropic Messages 协议，不转换 OpenAI / Gemini。使用前请退出独立的 `RelayBridge.app`，避免同一端口被占用。
-- `justwoker_compat.py` 来自 Fanorisky/unstream-proxy 的 `88cced9e46c0fa8ad4a8714dd80cc3a8bcaa3fe4`，保持原实现，仅在 justwoker 模式加载。
+- 默认模板不预置上游地址，第一次新建/编辑接口时必须自行填写。仅提供 Anthropic Messages 协议，不转换 OpenAI / Gemini。使用前请退出独立的 `RelayBridge.app`，避免同一端口被占用。
+- `justwoker_compat.py` 来自 Fanorisky/unstream-proxy 的 `88cced9e46c0fa8ad4a8714dd80cc3a8bcaa3fe4`；仅删除默认 `target_url`，保留原实现，并只在 justwoker 模式加载。
 
 ## 辅助功能权限
 
