@@ -13,6 +13,9 @@ struct SettingsHooks {
     var isTrusted: () -> Bool
     var revealApp: () -> Void
     var resetPermission: () -> Void
+    var relaySummary: () -> (configured: Int, running: Int)
+    var openRelayBridge: () -> Void
+    var stopAllRelays: () -> Void
 }
 
 private final class SidebarItemView: NSView {
@@ -127,8 +130,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private(set) var lastSliderCount = 0
     private(set) var lastSwitchCount = 0
 
-    private let pageTitles = ["权限", "窗口切换", "临时口袋", "外观"]
-    private let pageSymbols = ["lock.shield", "macwindow.on.rectangle", "tray.full", "slider.horizontal.3"]
+    private let pageTitles = ["权限", "窗口切换", "临时口袋", "中转接口", "外观"]
+    private let pageSymbols = ["lock.shield", "macwindow.on.rectangle", "tray.full",
+                               "arrow.triangle.branch", "slider.horizontal.3"]
 
     private var prefersSolidSurface: Bool {
         NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
@@ -270,6 +274,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         case 0: buildPermissionPage(into: page)
         case 1: buildSwitcherPage(into: page)
         case 2: buildPocketPage(into: page)
+        case 3: buildRelayPage(into: page)
         default: buildAppearancePage(into: page)
         }
         contentHost?.addSubview(page)
@@ -680,6 +685,61 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         return row
     }
 
+    // MARK: - Page: relay bridge
+
+    private func buildRelayPage(into page: NSView) {
+        addHeader("中转接口", "把 Anthropic 中转接口修复成客户端可读取的流式输出。", to: page)
+        let summary = hooks.relaySummary()
+
+        let status = card(NSRect(x: contentX, y: 88, width: contentWidth, height: 136), to: page)
+        status.addSubview(UIKitBits.label("本机中转", size: 12, color: .secondaryLabelColor,
+                                          frame: NSRect(x: 16, y: 14, width: 200, height: 18)))
+        let countText = summary.configured == 0 ? "尚未配置接口"
+            : "\(summary.configured) 个接口 · \(summary.running) 个运行中"
+        status.addSubview(UIKitBits.label(countText, size: 20, weight: .semibold,
+                                          frame: NSRect(x: 16, y: 34, width: 480, height: 28)))
+        status.addSubview(UIKitBits.paragraph("每个接口使用独立本机端口；关闭设置窗口后代理仍会继续运行。",
+                                              size: 11, color: .secondaryLabelColor,
+                                              frame: NSRect(x: 16, y: 66, width: 480, height: 18),
+                                              lines: 1))
+
+        let open = NSButton(title: "打开中转接口…", target: self, action: #selector(openRelayBridge))
+        open.bezelStyle = .rounded
+        open.bezelColor = .controlAccentColor
+        open.frame = NSRect(x: 16, y: 94, width: 140, height: 28)
+        status.addSubview(open)
+
+        let stop = NSButton(title: "停止全部代理", target: self, action: #selector(stopAllRelays))
+        stop.bezelStyle = .rounded
+        stop.frame = NSRect(x: 164, y: 94, width: 120, height: 28)
+        stop.isEnabled = summary.running > 0
+        status.addSubview(stop)
+
+        sectionLabel("工作方式", at: NSPoint(x: contentX, y: 244), width: 200, to: page)
+        let info = card(NSRect(x: contentX, y: 268, width: contentWidth, height: 156), to: page)
+        let rows = [
+            ("arrow.triangle.branch", "修复流式输出",
+             "上游强制非流式请求，代理重建 Claude 客户端需要的事件流。"),
+            ("network", "独立端口", "每个接口可分别启动、停止和测试，互不影响。"),
+            ("key", "密钥与本机",
+             "密钥保存在 macOS 钥匙串；配置位于 ~/Library/Application Support/RelayBridge。")
+        ]
+        for (offset, row) in rows.enumerated() {
+            info.addSubview(pocketUsageRow(symbol: row.0, title: row.1, detail: row.2,
+                                           y: CGFloat(8 + offset * 48)))
+            if offset < rows.count - 1 {
+                info.addSubview(UIKitBits.separator(
+                    frame: NSRect(x: 16, y: CGFloat(55 + offset * 48),
+                                  width: contentWidth - 34, height: 1)))
+            }
+        }
+
+        page.addSubview(UIKitBits.paragraph(
+            "支持通用 SSE 修复与 justwoker 工具兼容；仅提供 Anthropic Messages 协议。使用前先退出独立的 RelayBridge.app，避免同一端口被占用。",
+            size: 11, color: .tertiaryLabelColor,
+            frame: NSRect(x: contentX, y: 440, width: contentWidth, height: 44), lines: 2))
+    }
+
     // MARK: - Page: appearance
 
     private struct MetricDefinition {
@@ -918,6 +978,15 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     @objc private func clearPocket() {
         hooks.clearPocket()
+        rebuildPage()
+    }
+
+    @objc private func openRelayBridge() {
+        hooks.openRelayBridge()
+    }
+
+    @objc private func stopAllRelays() {
+        hooks.stopAllRelays()
         rebuildPage()
     }
 

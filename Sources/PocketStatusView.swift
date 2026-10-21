@@ -8,7 +8,6 @@ final class PocketStatusView: NSView {
     var onDrop: ((NSPasteboard) -> Bool)?
     var onDropCompleted: (() -> Void)?
     private weak var statusButton: NSStatusBarButton?
-    private var icon: NSImage?
     private var count = 0
     private var shakeDetector = ShakeDetector(minimumSegmentDistance: 5,
                                                maximumDuration: 0.75,
@@ -20,8 +19,7 @@ final class PocketStatusView: NSView {
 
     var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
 
-    init(image: NSImage?, statusButton: NSStatusBarButton) {
-        self.icon = image
+    init(statusButton: NSStatusBarButton) {
         self.statusButton = statusButton
         super.init(frame: statusButton.bounds)
         autoresizingMask = [.width, .height]
@@ -59,9 +57,6 @@ final class PocketStatusView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        guard let icon = icon else { return }
-        let imageRect = NSRect(x: max(0, (bounds.width - 20) / 2), y: 2, width: 20, height: 18)
-        icon.draw(in: imageRect)
         guard count > 0 else { return }
         let text = "\(count)" as NSString
         let badgeWidth: CGFloat = count > 99 ? 18 : 15

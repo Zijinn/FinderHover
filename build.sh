@@ -16,6 +16,8 @@ trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$STAGE/FinderHover.app/Contents/MacOS" "$STAGE/FinderHover.app/Contents/Resources"
 cp "$ROOT/Info.plist" "$STAGE/FinderHover.app/Contents/Info.plist"
 cp "$ROOT/Assets/AppIcon.icns" "$STAGE/FinderHover.app/Contents/Resources/AppIcon.icns"
+cp "$ROOT/Resources/RelayBridge/bridge.py" "$ROOT/Resources/RelayBridge/justwoker_compat.py" \
+    "$STAGE/FinderHover.app/Contents/Resources/"
 printf 'MacToolbox build output\n' > "$STAGE/FinderHover.app/Contents/Resources/finderhover-generated.txt"
 SDK="$(xcrun --sdk macosx --show-sdk-path)"
 xcrun swiftc -swift-version 5 -O -sdk "$SDK" -target "$(uname -m)-apple-macosx26.0" \
@@ -28,8 +30,10 @@ xcrun swiftc -swift-version 5 -O -sdk "$SDK" -target "$(uname -m)-apple-macosx26
     "$ROOT/Sources/PocketPanel.swift" \
     "$ROOT/Sources/PocketStatusView.swift" "$ROOT/Sources/ShortcutManager.swift" \
     "$ROOT/Sources/PermissionWindow.swift" "$ROOT/Sources/SettingsWindow.swift" \
+    "$ROOT/Sources/RelayBridgeWindow.swift" \
     "$ROOT/Sources/AppController.swift" "$ROOT/Sources/main.swift" \
-    -framework AppKit -framework ApplicationServices -framework Carbon -framework Security -o "$STAGE/FinderHover.app/Contents/MacOS/FinderHover"
+    -framework AppKit -framework ApplicationServices -framework Carbon -framework Security \
+    -framework SwiftUI -o "$STAGE/FinderHover.app/Contents/MacOS/FinderHover"
 plutil -lint "$STAGE/FinderHover.app/Contents/Info.plist"
 # Ad-hoc signatures are keyed to the binary hash, so every rebuild silently revokes
 # the Accessibility grant. Any real certificate (self-signed or Apple Development)

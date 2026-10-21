@@ -27,3 +27,7 @@ DerivedData/
 # Local agent / planning state (contains absolute paths from this machine)
 .workbuddy-ai/
 .pi/
+
+# Python bytecode
+__pycache__/
+*.pyc

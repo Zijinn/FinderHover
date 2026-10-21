@@ -12,6 +12,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private lazy var dragShake = DragShakeWatcher()
 
     private lazy var permissionWindow = PermissionWindowController(service: service)
+    private var relayBridge: RelayBridgeWindowController?
     private lazy var settingsWindow: SettingsWindowController = {
         SettingsWindowController(
             settings: settings, shortcuts: shortcutManager, pocketStore: pocketStore,
@@ -28,7 +29,19 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 revealApp: {
                     NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL])
                 },
-                resetPermission: { [weak self] in self?.resetAccessibilityPermission() }))
+                resetPermission: { [weak self] in self?.resetAccessibilityPermission() },
+                relaySummary: { [weak self] in
+                    MainActor.assumeIsolated {
+                        (self?.relayBridge?.profileCount ?? 0,
+                         self?.relayBridge?.activeCount ?? 0)
+                    }
+                },
+                openRelayBridge: { [weak self] in
+                    MainActor.assumeIsolated { self?.relayBridge?.show() }
+                },
+                stopAllRelays: { [weak self] in
+                    MainActor.assumeIsolated { self?.relayBridge?.stopAll() }
+                }))
     }()
 
     private var statusItem: NSStatusItem!
@@ -59,6 +72,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        relayBridge = MainActor.assumeIsolated { RelayBridgeWindowController() }
         if let appearance = value(after: "--appearance") {
             windowPanel.setAppearance(appearance)
             NSApp.appearance = NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua)
@@ -204,6 +218,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         windowPanel.hide()
         pocketPanel.hide()
         pocketStore.clear()
+        MainActor.assumeIsolated { relayBridge?.shutdown() }
     }
 
     // MARK: - Hover polling
@@ -363,8 +378,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let button = statusItem.button else { return }
         let icon = NSImage(systemSymbolName: "rectangle.stack", accessibilityDescription: "MacToolbox")
         icon?.isTemplate = true
-        button.image = nil
-        let statusView = PocketStatusView(image: icon, statusButton: button)
+        button.image = icon
+        button.imageScaling = .scaleProportionallyDown
+        let statusView = PocketStatusView(statusButton: button)
         statusView.frame = button.bounds
         button.addSubview(statusView)
         pocketStatusView = statusView
@@ -414,6 +430,34 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
         add("显示当前应用窗口", #selector(showCurrentAppWindows(_:)))
         add("打开临时口袋", #selector(showPocket(_:)))
+
+        let relayMenuItem = NSMenuItem(title: "中转接口", action: nil, keyEquivalent: "")
+        let relayMenu = NSMenu(title: "中转接口")
+        relayMenu.autoenablesItems = false
+        let openRelay = NSMenuItem(title: "打开中转接口…",
+                                   action: #selector(openRelayBridge(_:)), keyEquivalent: "")
+        openRelay.target = self
+        relayMenu.addItem(openRelay)
+        let relaySnapshot = relayMenuSnapshot()
+        if !relaySnapshot.profiles.isEmpty {
+            relayMenu.addItem(.separator())
+            for profile in relaySnapshot.profiles {
+                let title = (relaySnapshot.active.contains(profile.id) ? "停止 " : "启动 ") + profile.name
+                let item = NSMenuItem(title: title,
+                                      action: #selector(toggleRelayProfile(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = profile.id
+                relayMenu.addItem(item)
+            }
+        }
+        relayMenu.addItem(.separator())
+        let stopAllRelays = NSMenuItem(title: "停止全部代理",
+                                       action: #selector(stopAllRelays(_:)), keyEquivalent: "")
+        stopAllRelays.target = self
+        stopAllRelays.isEnabled = !relaySnapshot.active.isEmpty
+        relayMenu.addItem(stopAllRelays)
+        relayMenuItem.submenu = relayMenu
+        menu.addItem(relayMenuItem)
         menu.addItem(.separator())
 
         let permission = NSMenuItem(title: permissionGranted ? "辅助功能：已授权" : "辅助功能：尚未授权",
@@ -434,6 +478,25 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         item.isEnabled = false
         menu.addItem(item)
+    }
+
+    private func relayMenuSnapshot() -> (profiles: [RelayProfile], active: Set<String>) {
+        MainActor.assumeIsolated {
+            (relayBridge?.store.profiles ?? [], relayBridge?.store.active ?? [])
+        }
+    }
+
+    @objc private func openRelayBridge(_ sender: Any?) {
+        MainActor.assumeIsolated { relayBridge?.show() }
+    }
+
+    @objc private func toggleRelayProfile(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        MainActor.assumeIsolated { relayBridge?.toggle(id) }
+    }
+
+    @objc private func stopAllRelays(_ sender: Any?) {
+        MainActor.assumeIsolated { relayBridge?.stopAll() }
     }
 
     /// Walks the whole menu graph without clicking anything, then builds every
@@ -475,6 +538,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let titles = menu.items.map(\.title).filter { !$0.isEmpty }
         var report: [String: Any] = ["menuBuilt": true,
                 "statusItemCreated": statusItem != nil,
+                "statusItemImageSet": statusItem?.button?.image != nil,
+                "statusItemImageIsTemplate": statusItem?.button?.image?.isTemplate == true,
                 "statusItemHasMenu": statusItem?.menu === menu,
                 "menuDelegateIsController": menu.delegate === self,
                 "topLevelItemCount": menu.items.count,
@@ -488,6 +553,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 "unresolvedSelectors": unresolvedSelector,
                 "unresolvedItemTitles": unresolvedTitles,
                 "emptySubmenuCount": emptySubmenus,
+                "relayMenuPresent": menu.items.contains { $0.title == "中转接口" && $0.submenu != nil },
                 "pocketPanelConstructed": true,
                 "pocketPanelVisible": pocketPanel.isVisible,
                 "pocketItemCount": pocketStore.count,
@@ -495,6 +561,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     titles.contains("辅助功能：尚未授权") == !permissionGranted,
                 "accessibilityTrusted": permissionGranted]
         for (key, value) in settingsWindow.smokeReport() { report[key] = value }
+        let relayReport = MainActor.assumeIsolated { relayBridge?.smokeReport() ?? [:] }
+        for (key, value) in relayReport { report[key] = value }
         return report
     }
 

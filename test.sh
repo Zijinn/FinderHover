@@ -20,6 +20,25 @@ xcrun swiftc -swift-version 5 "$ROOT/Sources/AppModel.swift" "$ROOT/Sources/Sett
     "$ROOT/Tests/ModelTests.swift" \
     -framework Foundation -framework CoreGraphics -framework ApplicationServices -o "$MODEL_TEST"
 "$MODEL_TEST" | tee "$ROOT/TestResults/model-tests.txt"
+PYTHON="${PYTHON:-}"
+if [ -z "$PYTHON" ]; then
+    for candidate in /opt/anaconda3/bin/python /opt/homebrew/bin/python3 /usr/bin/python3; do
+        if [ -x "$candidate" ]; then PYTHON="$candidate"; break; fi
+    done
+fi
+if [ -z "$PYTHON" ] || [ ! -x "$PYTHON" ]; then echo '未找到 Python 3' >&2; exit 1; fi
+PYTHONPATH="$ROOT/Resources/RelayBridge" "$PYTHON" "$ROOT/Tests/RelayBridge/test_bridge.py" \
+    > "$ROOT/TestResults/relaybridge-tests.txt" 2>&1 || {
+        cat "$ROOT/TestResults/relaybridge-tests.txt" >&2
+        exit 1
+    }
+relay_tests=$(grep -c ' \.\.\. ok$' "$ROOT/TestResults/relaybridge-tests.txt" || true)
+if [ "$relay_tests" -ne 10 ]; then
+    cat "$ROOT/TestResults/relaybridge-tests.txt" >&2
+    echo "RelayBridge 协议测试数量异常：$relay_tests" >&2
+    exit 1
+fi
+printf 'PASS: RelayBridge protocol tests (%s tests)\n' "$relay_tests"
 "$ROOT/build.sh"
 APP="$ROOT/build/FinderHover.app/Contents/MacOS/FinderHover"
 # Launch the binary directly instead of `open --args`: LaunchServices does not
@@ -139,10 +158,15 @@ for key in ('menuBuilt', 'statusItemHasMenu', 'menuDelegateIsController', 'secti
             'settingsAppRowsMatchManagedApps', 'settingsAppearanceSlidersComplete', 'settingsBulkSelectPresent',
             'permissionNoteMatchesState', 'pocketPanelConstructed'):
     assert menu_report.get(key) is True, (key, menu_report)
+assert menu_report['statusItemImageSet'] is True, menu_report
+assert menu_report['statusItemImageIsTemplate'] is True, menu_report
 assert menu_report['actionItemsMissingTarget'] == 0, menu_report
 assert menu_report['unresolvedSelectors'] == 0, menu_report
 assert menu_report['emptySubmenuCount'] == 0, menu_report
-assert menu_report['settingsPageCount'] == 4, menu_report
+assert menu_report['settingsPageCount'] == 5, menu_report
+assert menu_report['relayMenuPresent'] is True, menu_report
+assert menu_report['relayWindowConstructed'] is True, menu_report
+assert menu_report['relayBackendBundled'] is True, menu_report
 assert menu_report['settingsManagedAppCount'] > 0, menu_report
 assert menu_report['settingsGlassMaterial'] in ('NSGlassEffectView', 'NSVisualEffectView-fallback',
                                                 'opaque-fallback'), menu_report
@@ -151,14 +175,17 @@ assert menu_report['settingsSwitchCount'] >= 3, menu_report
 assert menu_report['topLevelItemCount'] >= 9, menu_report
 print(f"PASS: launcher menu builds ({menu_report['topLevelItemCount']} top rows, "
       f"{menu_report['actionableItemCount']} actions, 0 unresolved selectors)")
+print('PASS: relay bridge menu is present')
+print('PASS: relay bridge window and bundled backend are ready')
+print('PASS: menu bar icon uses a template image')
 print(f"PASS: settings window builds ({menu_report['settingsPageCount']} pages, "
       f"{menu_report['settingsSidebarItemCount']} sidebar items, "
       f"{menu_report['settingsAppRowCount']} app rows, {menu_report['settingsSliderCount']} sliders, "
       f"{menu_report['settingsSwitchCount']} switches, {menu_report['settingsWindowSize']} pt)")
 print(f"PASS: settings window uses continuous glass surface ({menu_report['settingsGlassMaterial']})")
 settings_report = json.loads((root / 'settings.png.json').read_text())
-assert settings_report['pageCount'] == 4, settings_report
-assert len(settings_report['pages']) == 4, settings_report
+assert settings_report['pageCount'] == 5, settings_report
+assert len(settings_report['pages']) == 5, settings_report
 for page in settings_report['pages']:
     assert page['width'] == 576 and page['height'] == 560, page
     assert page['pngBytes'] > 5000, page
@@ -175,7 +202,7 @@ print(f"PASS: permission guide renders ({permission_report['pixelsWide']}x"
       f"{permission_report['pixelsHigh']}, translocated={permission_report['translocated']}, "
       f"trusted={permission_report['trusted']})")
 dark_settings = json.loads((root / 'settings-dark.png.json').read_text())
-assert dark_settings['pageCount'] == 4, dark_settings
+assert dark_settings['pageCount'] == 5, dark_settings
 assert dark_settings['window']['pngBytes'] > 5000, dark_settings
 assert all('Dark' in page['appearance'] for page in dark_settings['pages']), dark_settings
 assert (root / 'settings-dark-window.png').read_bytes() != (root / 'settings-window.png').read_bytes()
