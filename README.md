@@ -138,7 +138,7 @@ iconutil -c icns Assets/AppIcon.iconset -o Assets/AppIcon.icns
 
 ## 发布
 
-当前版本 `0.5.0`。打包脚本生成 `MacToolbox-0.5.0.dmg`，内部应用显示名称为“MacToolbox”。
+当前版本 `0.5.1`。打包脚本生成 `MacToolbox-0.5.1.dmg`，内部应用显示名称为“MacToolbox”。
 
 ## 构建
 
